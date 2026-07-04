@@ -1,0 +1,33 @@
+# workflows/parallel-poems.yaml — copy to $ATOM_HOME/workflows/ to run it.
+name: parallel-poems
+description: Draft poems in parallel, then refine them in place.
+inputs:
+  - name: topic
+    required: true
+    description: What the poems are about.
+  - name: style
+    required: false
+    default: free verse
+steps:
+  - title: Draft
+    description: Three poets each draft one poem into the shared workspace.
+    tasks:
+      - id: poet_a
+        prompt: "Write a {{ style }} poem about {{ topic }}. Save it as poem_a.md in {{ workspace }}."
+        model: haiku
+        thinking: low
+      - id: poet_b
+        prompt: "Write a {{ style }} poem about {{ topic }} from a child's point of view. Save it as poem_b.md in {{ workspace }}."
+        model: haiku
+        thinking: low
+      - id: poet_c
+        prompt: "Write a {{ style }} poem about {{ topic }} as a strict sonnet. Save it as poem_c.md in {{ workspace }}."
+        model: haiku
+        thinking: low
+  - title: Refine
+    description: One editor sharpens every draft.
+    tasks:
+      - id: refiner
+        prompt: "Read every poem_*.md in {{ workspace }} and sharpen each for imagery and rhythm, saving each back in place."
+        model: haiku
+        thinking: medium
