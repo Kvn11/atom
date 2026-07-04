@@ -125,3 +125,34 @@ async def test_failed_task_halts_run_and_skips_next_step(base_config, atom_home,
     assert manifest.steps[1].status == "pending"
     assert manifest.steps[1].tasks[0].status == "pending"
     assert engine.store.load_chat("run3", 1, "later") is None
+
+
+@pytest.mark.asyncio
+async def test_bad_prompt_template_halts_run(base_config, atom_home):
+    wf = WorkflowDef.model_validate({
+        "name": "demo",
+        "steps": [
+            {"title": "Draft", "tasks": [{"id": "t1", "prompt": "use {{ undeclared_var }}"}]},
+            {"title": "Never", "tasks": [{"id": "t2", "prompt": "later"}]},
+        ],
+    })
+    engine = WorkflowEngine(base_config)  # no prepared_provider; render error happens pre-run_agent
+    engine.create_run(wf, {}, "runbad", "2026-07-03T00:00:00")
+    manifest = await engine.execute("runbad")
+    assert manifest.status == "halted"
+    assert manifest.steps[0].tasks[0].status == "failed"
+    assert "undeclared_var" in (manifest.steps[0].tasks[0].error or "")
+    assert manifest.steps[1].tasks[0].status == "pending"   # step 2 never ran
+
+
+@pytest.mark.asyncio
+async def test_restricted_allowed_roots_still_allows_run_workspace(base_config, atom_home):
+    base_config.sandbox.allowed_workspace_roots = [str(atom_home / "unrelated")]  # does NOT include runs dir
+    scripts = {"t1": [_write_call(f"{WS}/out.txt", "hi\n", "w1"), AIMessage(content="ok")]}
+    engine = WorkflowEngine(base_config, prepared_provider=lambda td, sd, wf: make_prepared(list(scripts[td.id])))
+    wf = WorkflowDef.model_validate({"name": "demo",
+        "steps": [{"title": "Draft", "tasks": [{"id": "t1", "prompt": "write"}]}]})
+    engine.create_run(wf, {}, "runrestrict", "2026-07-03T00:00:00")
+    manifest = await engine.execute("runrestrict")
+    assert manifest.status == "complete"
+    assert (engine.store.workspace_dir("runrestrict") / "out.txt").read_text() == "hi\n"
