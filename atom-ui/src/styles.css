@@ -1,0 +1,24 @@
+* { box-sizing: border-box; }
+body { margin: 0; font-family: ui-sans-serif, system-ui, sans-serif; background: #0f1115; color: #e6e6e6; }
+.app > header { padding: 12px 20px; font-weight: 700; background: #171a21; cursor: pointer; }
+.panel { max-width: 720px; margin: 24px auto; padding: 0 20px; }
+.card { padding: 14px; margin: 8px 0; background: #171a21; border-radius: 8px; cursor: pointer; }
+.card:hover { background: #1e2230; }
+.dim { color: #8b93a7; font-size: 13px; }
+.field { display: block; margin: 12px 0; }
+.field input { display: block; width: 100%; padding: 8px; margin-top: 4px; background: #0b0d12; color: #e6e6e6; border: 1px solid #2a2f3a; border-radius: 6px; }
+button { padding: 10px 16px; background: #3b82f6; color: white; border: 0; border-radius: 6px; cursor: pointer; }
+.run { display: grid; grid-template-columns: 320px 1fr; gap: 16px; padding: 20px; }
+.step { margin: 10px 0; padding: 10px; background: #171a21; border-radius: 8px; }
+.step-title { font-weight: 600; margin-bottom: 6px; }
+.task { padding: 6px 8px; margin: 4px 0; border-radius: 6px; cursor: pointer; background: #0b0d12; }
+.task.active { outline: 2px solid #3b82f6; }
+.task.succeeded { border-left: 3px solid #22c55e; }
+.task.failed { border-left: 3px solid #ef4444; }
+.task.running { border-left: 3px solid #eab308; }
+.badge { font-size: 12px; padding: 2px 8px; border-radius: 10px; background: #2a2f3a; }
+.badge.complete { background: #14532d; } .badge.halted { background: #7f1d1d; }
+.chat { background: #171a21; border-radius: 8px; padding: 12px; min-height: 60vh; }
+.msg { margin: 10px 0; padding: 8px 10px; background: #0b0d12; border-radius: 6px; }
+.msg .role { font-size: 12px; color: #8b93a7; } .msg.tool .role { color: #eab308; }
+.artifact { padding: 4px 8px; cursor: pointer; font-size: 13px; } .artifact:hover { color: #3b82f6; }
