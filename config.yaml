@@ -1,0 +1,45 @@
+# atom configuration — the whole harness is driven from here so it can be reused as a
+# foundation for different AI projects. See src/atom/config/schema.py for all fields.
+
+# home: ~/.atom            # default; or set the ATOM_HOME env var
+defaults:
+  user_id: default
+  agent: default           # which profile `atom run` uses by default
+
+checkpointer:
+  backend: sqlite          # sqlite (durable) | memory (tests)
+
+sandbox:
+  bash_enabled: true       # host bash for the lead agent (no container isolation in v1)
+  allowed_workspace_roots: []   # restrict where an "existing" workspace may be bound
+
+compaction:
+  ratio: 0.5               # summarize once input reaches 50% of the model's context window
+  keep_messages: 20
+
+library:
+  search: bm25
+  auto_promote_k: 3
+  min_score: 0.0
+
+guardrails:
+  enabled: false           # dormant seam; turn on to gate tool calls (e.g. bash)
+
+track_usage: true
+
+# --- Agent profiles: each is one project's lead agent, defined entirely in config. ---
+agents:
+  default:
+    model: haiku                       # registry key or "<provider>:<model>"
+    summarizer_model: haiku            # cheap model for compaction/title; null -> reuse lead
+    thinking: low                      # off | low|medium|high | adaptive (Opus) | int budget (e.g. 16000)
+    system_prompt: "@prompts/lead_system.md"   # inline string OR @file
+    user_prompt: null                  # optional wrapper for the incoming task
+    summary_prompt: "@prompts/summary.md"      # compaction prompt (must keep the {messages} placeholder)
+    tools:
+      frequent: [read_file, write_file, edit_file, bash, ls, grep, glob, present_files, view_image]
+    skills:
+      frequent: []
+    subagents:
+      max_concurrent: 3
+      timeout_seconds: 900

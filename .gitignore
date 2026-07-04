@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+.env
+build/
+dist/
+# Local atom home if created inside the repo
+.atom/
+# Local tool caches (regenerated per machine)
+.serena/
+# Frontend (atom-ui) build + deps
+node_modules/
+atom-ui/dist/

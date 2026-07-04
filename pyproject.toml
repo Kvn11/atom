@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "atom-harness"
+version = "0.1.0"
+description = "atom — a DeerFlow-style agentic middleware harness on LangChain v1"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "atom" }]
+dependencies = [
+    # --- Core harness (LangChain / LangGraph v1) ---
+    "langchain>=1.0,<2",
+    "langchain-core>=1.0,<2",
+    "langgraph>=1.0,<2",
+    "langgraph-checkpoint-sqlite>=2.0",
+    "aiosqlite>=0.20",
+    # --- Model providers (pin each; upgrade deliberately) ---
+    "langchain-anthropic>=1.0",
+    "langchain-openai>=1.0",
+    "langchain-google-genai>=3.0",
+    "langchain-qwq>=0.2",
+    # --- Library search (deviation #4) ---
+    "rank-bm25>=0.2.2",
+    # --- Built-in tool support / config / CLI ---
+    "Pillow>=10.4",
+    "jinja2>=3.1",
+    "pyyaml>=6.0",
+    "pydantic>=2.7",
+    "python-dotenv>=1.0",
+    "typer>=0.12",
+    "rich>=13.7",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2",
+    "pytest-asyncio>=0.24",
+    "pytest-mock>=3.14",
+]
+
+[project.scripts]
+atom = "atom.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+atom = ["prompts/*.md"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["src"]
+filterwarnings = ["ignore:Pydantic serializer warnings:UserWarning"]
