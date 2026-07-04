@@ -48,6 +48,12 @@ class LibraryConfig(_Base):
     min_score: float = 0.0
 
 
+class WorkflowConfig(_Base):
+    # Max tasks run concurrently within a single step; per-task wall-clock timeout.
+    max_parallel: int = 4
+    task_timeout_seconds: int = 1800
+
+
 class GuardrailConfig(_Base):
     enabled: bool = False
 
@@ -90,6 +96,7 @@ class AtomConfig(_Base):
     sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
     compaction: CompactionConfig = Field(default_factory=CompactionConfig)
     library: LibraryConfig = Field(default_factory=LibraryConfig)
+    workflow: WorkflowConfig = Field(default_factory=WorkflowConfig)
     guardrails: GuardrailConfig = Field(default_factory=GuardrailConfig)
     track_usage: bool = True
     agents: dict[str, AgentProfile] = Field(default_factory=lambda: {"default": AgentProfile()})
