@@ -75,3 +75,11 @@ def test_duplicate_task_ids_rejected():
 def test_empty_steps_rejected():
     with pytest.raises(Exception):
         WorkflowDef(name="w", steps=[])
+
+
+def test_resolve_inputs_treats_null_as_missing(atom_home):
+    _write(atom_home, "demo", DEMO)
+    wf = load_workflow("demo", str(atom_home))
+    with pytest.raises(MissingInputError):
+        resolve_inputs(wf, {"topic": None})          # required None -> missing
+    assert resolve_inputs(wf, {"topic": "x", "style": None}) == {"topic": "x", "style": "free verse"}  # optional None -> default

@@ -102,7 +102,7 @@ def resolve_inputs(workflow: WorkflowDef, provided: dict) -> dict:
     resolved: dict = {}
     missing: list[str] = []
     for inp in workflow.inputs:
-        if inp.name in provided and str(provided[inp.name]).strip() != "":
+        if inp.name in provided and provided[inp.name] is not None and str(provided[inp.name]).strip() != "":
             resolved[inp.name] = provided[inp.name]
         elif inp.default is not None:
             resolved[inp.name] = inp.default
