@@ -38,9 +38,15 @@ function WorkflowList({ onPick }: { onPick: (w: Workflow) => void }) {
 
 function RunForm({ workflow, onStarted }: { workflow: Workflow; onStarted: (id: string) => void }) {
   const [values, setValues] = useState<Record<string, string>>({});
+  const [error, setError] = useState<string>("");
   const submit = async () => {
-    const { run_id } = await api.submit(workflow.name, values);
-    onStarted(run_id);
+    setError("");
+    try {
+      const { run_id } = await api.submit(workflow.name, values);
+      onStarted(run_id);
+    } catch (e) {
+      setError(String(e instanceof Error ? e.message : e));
+    }
   };
   return (
     <div className="panel">
@@ -55,6 +61,7 @@ function RunForm({ workflow, onStarted }: { workflow: Workflow; onStarted: (id: 
         </label>
       ))}
       <button onClick={submit}>Start run</button>
+      {error && <div className="error">{error}</div>}
     </div>
   );
 }

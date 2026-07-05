@@ -23,5 +23,6 @@ export const api = {
     fetch(`/api/runs/${id}/tasks/${step}/${task}/messages`).then(j),
   artifacts: (id: string): Promise<Artifact[]> => fetch(`/api/runs/${id}/artifacts`).then(j),
   artifact: (id: string, path: string): Promise<string> =>
-    fetch(`/api/runs/${id}/artifacts/${path}`).then((r) => r.text()),
+    fetch(`/api/runs/${id}/artifacts/${path.split("/").map(encodeURIComponent).join("/")}`)
+      .then(async (r) => { if (!r.ok) throw new Error(await r.text()); return r.text(); }),
 };
