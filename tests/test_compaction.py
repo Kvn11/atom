@@ -41,3 +41,114 @@ def test_fallback_window_drives_trigger_when_profile_missing():
     assert window == spec.context_window  # fell back to the static registry value
     mw = build_compaction_middleware(model, context_window=window, ratio=0.5)
     assert mw.trigger == ("tokens", spec.context_window // 2)
+
+
+from langchain_core.messages import AIMessage, HumanMessage, RemoveMessage
+
+from atom.middleware.compaction import PinnedSummarizationMiddleware
+
+
+def _pinning_mw(summary_text="SUMMARY", keep=2):
+    # context_window=2, ratio=0.5 -> trigger ("tokens", 1): any non-empty history summarizes.
+    model = ScriptedChatModel(
+        responses=[AIMessage(content=summary_text)], profile={"max_input_tokens": 200_000}
+    )
+    return build_compaction_middleware(
+        model, context_window=2, ratio=0.5, keep_messages=keep
+    )
+
+
+def _five_messages(first="ORIGINAL TASK"):
+    return [
+        HumanMessage(content=first),
+        AIMessage(content="a"),
+        HumanMessage(content="b"),
+        AIMessage(content="c"),
+        HumanMessage(content="d"),
+    ]
+
+
+def _pin_msgs(messages):
+    return [
+        m for m in messages
+        if getattr(m, "additional_kwargs", {}).get("lc_source") == "pinned_instruction"
+    ]
+
+
+def test_factory_returns_pinning_subclass():
+    mw = _pinning_mw()
+    assert isinstance(mw, PinnedSummarizationMiddleware)
+
+
+def test_pin_injected_verbatim_after_compaction():
+    mw = _pinning_mw()
+    out = mw.before_model(
+        {"messages": _five_messages(), "pinned_instruction": "ORIGINAL TASK"}, None
+    )
+    result = out["messages"]
+    assert isinstance(result[0], RemoveMessage)          # sentinel first
+    pins = _pin_msgs(result)
+    assert len(pins) == 1
+    assert pins[0].content.endswith("ORIGINAL TASK")     # verbatim, with prefix
+    assert "Standing instruction" in pins[0].content
+    # pin sits BEFORE the library summary message
+    pin_i = result.index(pins[0])
+    summary_i = next(
+        i for i, m in enumerate(result)
+        if getattr(m, "additional_kwargs", {}).get("lc_source") == "summarization"
+    )
+    assert pin_i < summary_i
+
+
+def test_pin_survives_two_compactions_verbatim():
+    pinned = "PIN ME EXACTLY 123"
+    mw1 = _pinning_mw(summary_text="SUM1")
+    out1 = mw1.before_model(
+        {"messages": _five_messages(first=pinned), "pinned_instruction": pinned}, None
+    )
+    # Apply the RemoveMessage(ALL) sentinel: the surviving list is everything after it.
+    kept = [m for m in out1["messages"] if not isinstance(m, RemoveMessage)]
+    kept += [AIMessage(content="more"), HumanMessage(content="more2"), AIMessage(content="more3")]
+    mw2 = _pinning_mw(summary_text="SUM2")
+    out2 = mw2.before_model({"messages": kept, "pinned_instruction": pinned}, None)
+    pins = _pin_msgs(out2["messages"])
+    assert len(pins) == 1
+    assert pins[0].content.endswith(pinned)              # undrifted after 2nd compaction
+
+
+def test_no_compaction_returns_none_untouched():
+    model = ScriptedChatModel(
+        responses=[AIMessage(content="S")], profile={"max_input_tokens": 200_000}
+    )
+    mw = build_compaction_middleware(model, context_window=200_000, ratio=0.5, keep_messages=20)
+    out = mw.before_model(
+        {"messages": [HumanMessage(content="hi")], "pinned_instruction": "hi"}, None
+    )
+    assert out is None
+
+
+def test_empty_pin_no_injection():
+    mw = _pinning_mw()
+    out = mw.before_model({"messages": _five_messages(), "pinned_instruction": ""}, None)
+    assert _pin_msgs(out["messages"]) == []
+
+
+async def test_async_pin_injection_matches_sync():
+    mw = _pinning_mw()
+    out = await mw.abefore_model(
+        {"messages": _five_messages(first="ASYNC ORIG"), "pinned_instruction": "ASYNC ORIG"}, None
+    )
+    pins = _pin_msgs(out["messages"])
+    assert len(pins) == 1 and pins[0].content.endswith("ASYNC ORIG")
+
+
+def test_trim_tokens_flows_into_middleware():
+    model = ScriptedChatModel(responses=[], profile={"max_input_tokens": 200_000})
+    mw = build_compaction_middleware(model, context_window=200_000, trim_tokens=8000)
+    assert mw.trim_tokens_to_summarize == 8000
+
+
+def test_trim_tokens_defaults_to_library_default_when_unset():
+    model = ScriptedChatModel(responses=[], profile={"max_input_tokens": 200_000})
+    mw = build_compaction_middleware(model, context_window=200_000)
+    assert mw.trim_tokens_to_summarize == 4000
