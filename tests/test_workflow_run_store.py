@@ -115,3 +115,54 @@ def test_artifact_path_confined(atom_home):
     ok = store.artifact_path("rp", "s0__t1/f.md")
     assert ok is not None and str(ok).endswith("/artifacts/s0__t1/f.md")
     assert store.artifact_path("rp", "../../run.json") is None
+
+
+import json as _json
+
+
+def _save_with_status(store, run_id, status, created_at,
+                      step_status="complete", task_status="succeeded"):
+    m = _manifest(run_id, store.workspace_dir(run_id))
+    m.created_at = created_at
+    m.status = status
+    m.steps[0].status = step_status
+    m.steps[0].tasks[0].status = task_status
+    store.create(m)
+    return m
+
+
+def test_summary_json_written_on_save(atom_home):
+    store = RunStore(str(atom_home))
+    store.create(_manifest("sm1", store.workspace_dir("sm1")))
+    sp = store.run_dir("sm1") / "summary.json"
+    assert sp.exists()
+    data = _json.loads(sp.read_text())
+    assert data["run_id"] == "sm1" and data["tasks_total"] == 1
+
+
+def test_list_summaries_counts_filter_pagination(atom_home):
+    store = RunStore(str(atom_home))
+    _save_with_status(store, "r_run", "running", "2026-07-01T00:00:00",
+                      step_status="running", task_status="running")
+    _save_with_status(store, "r_done", "complete", "2026-07-02T00:00:00")
+    _save_with_status(store, "r_halt", "halted", "2026-07-03T00:00:00",
+                      step_status="failed", task_status="failed")
+
+    page = store.list_summaries()
+    assert page["counts"] == {"active": 1, "complete": 1, "halted": 1}
+    assert page["total"] == 3
+    assert [i["run_id"] for i in page["items"]] == ["r_halt", "r_done", "r_run"]
+
+    active = store.list_summaries(status="active")
+    assert [i["run_id"] for i in active["items"]] == ["r_run"] and active["total"] == 1
+
+    pg2 = store.list_summaries(limit=1, offset=1)
+    assert [i["run_id"] for i in pg2["items"]] == ["r_done"] and pg2["total"] == 3
+
+
+def test_list_summaries_fallback_when_summary_missing(atom_home):
+    store = RunStore(str(atom_home))
+    _save_with_status(store, "r_x", "complete", "2026-07-01T00:00:00")
+    (store.run_dir("r_x") / "summary.json").unlink()
+    page = store.list_summaries()
+    assert [i["run_id"] for i in page["items"]] == ["r_x"]

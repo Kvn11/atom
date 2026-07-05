@@ -13,6 +13,9 @@ from atom.messages import message_text
 from atom.sandbox.paths import atom_home
 
 
+_ACTIVE = ("pending", "running")
+
+
 class ArtifactRef(BaseModel):
     name: str            # display name (basename, possibly disambiguated)
     path: str            # original virtual path as presented
@@ -48,6 +51,32 @@ class RunManifest(BaseModel):
     ended_at: Optional[str] = None
     workspace_path: str
     steps: list[StepState] = Field(default_factory=list)
+
+
+class RunSummary(BaseModel):
+    run_id: str
+    workflow: str
+    status: str
+    created_at: str
+    ended_at: Optional[str] = None
+    steps_total: int
+    steps_done: int
+    tasks_total: int
+    tasks_done: int
+    current_step: Optional[str] = None
+
+
+def summarize(manifest: RunManifest) -> RunSummary:
+    tasks = [t for s in manifest.steps for t in s.tasks]
+    return RunSummary(
+        run_id=manifest.run_id, workflow=manifest.workflow, status=manifest.status,
+        created_at=manifest.created_at, ended_at=manifest.ended_at,
+        steps_total=len(manifest.steps),
+        steps_done=sum(1 for s in manifest.steps if s.status == "complete"),
+        tasks_total=len(tasks),
+        tasks_done=sum(1 for t in tasks if t.status == "succeeded"),
+        current_step=next((s.title for s in manifest.steps if s.status != "complete"), None),
+    )
 
 
 def serialize_messages(messages: list) -> list[dict]:
@@ -94,12 +123,19 @@ class RunStore:
         self.save(manifest)
         return manifest
 
+    def _summary_path(self, run_id: str) -> Path:
+        return self.run_dir(run_id) / "summary.json"
+
     def save(self, manifest: RunManifest) -> None:
         path = self._manifest_path(manifest.run_id)
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_name("run.json.tmp")
         tmp.write_text(manifest.model_dump_json(indent=2), encoding="utf-8")
-        os.replace(tmp, path)          # atomic on POSIX
+        os.replace(tmp, path)          # atomic on POSIX; run.json is authoritative
+        sp = self._summary_path(manifest.run_id)
+        stmp = sp.with_name("summary.json.tmp")
+        stmp.write_text(summarize(manifest).model_dump_json(indent=2), encoding="utf-8")
+        os.replace(stmp, sp)           # cheap cache for list_summaries
 
     def load(self, run_id: str) -> RunManifest:
         return RunManifest.model_validate_json(self._manifest_path(run_id).read_text("utf-8"))
@@ -176,3 +212,43 @@ class RunStore:
         if target != base and not str(target).startswith(str(base) + os.sep):
             return None
         return target
+
+    def _read_summary(self, run_dir: Path) -> Optional["RunSummary"]:
+        sp = run_dir / "summary.json"
+        if sp.exists():
+            try:
+                return RunSummary.model_validate_json(sp.read_text("utf-8"))
+            except Exception:  # noqa: BLE001 — corrupt cache; fall back to the manifest
+                pass
+        mp = run_dir / "run.json"
+        if mp.exists():
+            try:
+                return summarize(RunManifest.model_validate_json(mp.read_text("utf-8")))
+            except Exception:  # noqa: BLE001
+                return None
+        return None
+
+    def list_summaries(self, status: str | None = None, limit: int = 50, offset: int = 0) -> dict:
+        empty = {"items": [], "total": 0, "counts": {"active": 0, "complete": 0, "halted": 0}}
+        if not self.runs_dir.is_dir():
+            return empty
+        summaries: list[RunSummary] = []
+        for d in self.runs_dir.iterdir():
+            s = self._read_summary(d)
+            if s is not None:
+                summaries.append(s)
+        counts = {"active": 0, "complete": 0, "halted": 0}
+        for s in summaries:
+            if s.status in _ACTIVE:
+                counts["active"] += 1
+            elif s.status in counts:
+                counts[s.status] += 1
+        if status and status != "all":
+            if status == "active":
+                summaries = [s for s in summaries if s.status in _ACTIVE]
+            else:
+                summaries = [s for s in summaries if s.status == status]
+        summaries.sort(key=lambda s: s.created_at, reverse=True)
+        total = len(summaries)
+        page = summaries[offset:offset + limit]
+        return {"items": [s.model_dump() for s in page], "total": total, "counts": counts}
