@@ -211,6 +211,10 @@ class WorkflowEngine:
             self.store.save_chat(
                 manifest.run_id, step_state.index, ts.id, serialize_messages(result.messages)
             )
+            presented = (result.state or {}).get("artifacts", [])
+            ts.artifacts = self.store.capture_artifacts(
+                manifest.run_id, step_state.index, ts.id, presented,
+            )
             ts.status = "succeeded"
         except asyncio.TimeoutError:
             ts.status = "failed"

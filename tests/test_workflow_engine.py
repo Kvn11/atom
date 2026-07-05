@@ -168,6 +168,10 @@ def _one_task_workflow() -> WorkflowDef:
     })
 
 
+def _present_call(paths, cid):
+    return AIMessage(content="", tool_calls=[_tc("present_files", {"filepaths": paths}, cid)])
+
+
 # ---- regression tests for code-review findings #1, #2, #4, #7, #10 ----
 
 @pytest.mark.asyncio
@@ -288,3 +292,41 @@ async def test_task_save_failure_does_not_escape_execute_or_wedge_sibling(base_c
     poet_b = next(t for t in manifest.steps[0].tasks if t.id == "poet_b")
     assert poet_a.status == "failed"       # its own save() blew up -> recorded as failed
     assert poet_b.status == "succeeded"    # sibling was not wedged by poet_a's failure
+
+
+@pytest.mark.asyncio
+async def test_presented_artifacts_captured(base_config, atom_home):
+    scripts = {"t1": [
+        _write_call(f"{WS}/out.md", "hi\n", "w1"),
+        _present_call([f"{WS}/out.md"], "p1"),
+        AIMessage(content="done"),
+    ]}
+    engine = WorkflowEngine(
+        base_config, prepared_provider=lambda td, sd, wf: make_prepared(list(scripts[td.id])))
+    engine.create_run(_one_task_workflow(), {}, "runart", "2026-07-03T00:00:00")
+    manifest = await engine.execute("runart")
+
+    assert manifest.status == "complete"
+    arts = manifest.steps[0].tasks[0].artifacts
+    assert len(arts) == 1 and arts[0].name == "out.md" and arts[0].rel == "s0__t1/out.md"
+    assert (engine.store.artifacts_dir("runart") / "s0__t1" / "out.md").read_text() == "hi\n"
+
+
+@pytest.mark.asyncio
+async def test_draft_artifact_snapshot_survives_refine_overwrite(base_config, atom_home):
+    scripts = {
+        "poet_a": [_write_call(f"{WS}/poem_a.md", "draft\n", "w1"),
+                   _present_call([f"{WS}/poem_a.md"], "p1"), AIMessage(content="d")],
+        "refiner": [_write_call(f"{WS}/poem_a.md", "refined\n", "w2"),
+                    _present_call([f"{WS}/poem_a.md"], "p2"), AIMessage(content="r")],
+    }
+    engine = WorkflowEngine(
+        base_config, prepared_provider=lambda td, sd, wf: make_prepared(list(scripts[td.id])))
+    engine.create_run(_draft_then_refine(), {"topic": "sea"}, "runsnap", "2026-07-03T00:00:00")
+    manifest = await engine.execute("runsnap")
+
+    assert manifest.status == "complete"
+    ad = engine.store.artifacts_dir("runsnap")
+    assert (ad / "s0__poet_a" / "poem_a.md").read_text() == "draft\n"      # snapshot preserved
+    assert (ad / "s1__refiner" / "poem_a.md").read_text() == "refined\n"
+    assert (engine.store.workspace_dir("runsnap") / "poem_a.md").read_text() == "refined\n"
