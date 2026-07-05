@@ -229,6 +229,8 @@ class RunStore:
         return None
 
     def list_summaries(self, status: str | None = None, limit: int = 50, offset: int = 0) -> dict:
+        offset = max(0, offset)
+        limit = max(0, limit)
         empty = {"items": [], "total": 0, "counts": {"active": 0, "complete": 0, "halted": 0}}
         if not self.runs_dir.is_dir():
             return empty

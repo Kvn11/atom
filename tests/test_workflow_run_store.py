@@ -166,3 +166,14 @@ def test_list_summaries_fallback_when_summary_missing(atom_home):
     (store.run_dir("r_x") / "summary.json").unlink()
     page = store.list_summaries()
     assert [i["run_id"] for i in page["items"]] == ["r_x"]
+
+
+def test_list_summaries_clamps_negative_offset(atom_home):
+    store = RunStore(str(atom_home))
+    _save_with_status(store, "r1", "complete", "2026-07-01T00:00:00")  # oldest
+    _save_with_status(store, "r2", "complete", "2026-07-02T00:00:00")  # newest
+    # offset=-1 must NOT wrap-around-slice (which would return just the oldest run);
+    # it clamps to 0 and returns both, newest first.
+    page = store.list_summaries(offset=-1)
+    assert [i["run_id"] for i in page["items"]] == ["r2", "r1"]
+    assert page["total"] == 2
