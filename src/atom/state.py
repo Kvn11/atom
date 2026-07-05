@@ -43,6 +43,10 @@ class ThreadState(AgentState):
     uploaded_files: NotRequired[list[str]]
     # Auto-generated thread title (set once by TitleMiddleware).
     title: NotRequired[str]
+    # The thread's first user instruction, captured once by InstructionPinMiddleware and
+    # re-injected verbatim into every compaction so it can never be trimmed or paraphrased
+    # away. Write-once; default (LastValue) channel semantics are fine — there is one write.
+    pinned_instruction: NotRequired[str]
     # Accumulated token usage (TokenUsageMiddleware + subagent deltas). Additive reducer.
     usage: Annotated[dict[str, int], merge_usage]
 
