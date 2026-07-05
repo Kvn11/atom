@@ -113,7 +113,7 @@ function RunView({ runId }: { runId: string }) {
         ))}
         <h3>Artifacts</h3>
         {arts.map((a) => (
-          <div key={a.path} className="artifact" onClick={() => api.artifact(runId, a.path).then(alert)}>
+          <div key={a.path} className="artifact" onClick={() => api.artifact(runId, a.path).then(alert).catch((e) => alert(String(e)))}>
             {a.path} <span className="dim">{a.size}b</span>
           </div>
         ))}
