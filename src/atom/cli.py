@@ -158,15 +158,35 @@ def workflow_run(
     import datetime
 
     from atom.workflow.engine import WorkflowEngine
-    from atom.workflow.schema import load_workflow
+    from atom.workflow.schema import load_workflow, MissingInputError
 
     _load_env()
+
+    # Check for malformed --input tokens (missing =)
+    if input:
+        for token in input:
+            if "=" not in token:
+                console.print(f"[red]Error: --input must be KEY=VALUE, got: {token}[/red]")
+                raise typer.Exit(1)
+
     cfg = load_config(config)
-    wf = load_workflow(name, cfg.home)
+
+    try:
+        wf = load_workflow(name, cfg.home)
+    except FileNotFoundError:
+        console.print(f"[red]Error: workflow '{name}' not found[/red]")
+        raise typer.Exit(1)
+
     inputs = dict(kv.split("=", 1) for kv in (input or []) if "=" in kv)
     engine = WorkflowEngine(cfg, profile=profile)
     run_id = uuid.uuid4().hex[:12]
-    engine.create_run(wf, inputs, run_id, datetime.datetime.now().isoformat(timespec="seconds"))
+
+    try:
+        engine.create_run(wf, inputs, run_id, datetime.datetime.now().isoformat(timespec="seconds"))
+    except MissingInputError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1)
+
     with console.status(f"[bold]running workflow {name}…[/bold]"):
         manifest = asyncio.run(engine.execute(run_id))
     for step in manifest.steps:
