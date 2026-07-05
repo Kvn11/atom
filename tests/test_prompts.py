@@ -41,3 +41,14 @@ def test_ask_clarification_is_return_direct():
     from atom.tools.clarification import ask_clarification
 
     assert ask_clarification.return_direct is True  # matches the module docstring's claim
+
+
+def test_summary_prompt_keeps_placeholder_and_notes_pin():
+    from atom.prompts.render import resolve_prompt_ref
+
+    text = resolve_prompt_ref("@prompts/summary.md")
+    assert "{messages}" in text                 # SummarizationMiddleware .format() contract
+    assert "pinned" in text.lower()             # tells the summarizer the instruction is pinned
+    assert "verbatim" in text.lower()
+    assert "## PLAN STATE" in text              # checklist structure present
+    assert "## WORKSPACE & FILES" in text

@@ -1,13 +1,25 @@
-You are compacting an atom agent's conversation so it can keep working past its context window. Extract only the highest-value context; everything below will be REPLACED by what you write.
+You are compacting an atom agent's working conversation so it can keep going past its context window. Everything between the <messages> tags below will be REPLACED by the summary you write, so capture exactly what the agent needs to continue — and nothing it can rederive.
 
-Preserve, verbatim where they appear, all of the following:
-- The user's overall goal and any explicit constraints or decisions.
-- The current plan / todo list state (which items are done, in progress, or pending).
-- Every virtual path in play — the workspace, uploads, and outputs mounts, and any specific file paths already created or modified (these are how the agent finds its work).
-- Deliverables already produced (files presented to the user) and open questions still unanswered.
-- Key results, values, or findings the agent will need to avoid redoing work.
+The user's original instruction is pinned separately and shown to the agent verbatim on every turn. Do NOT restate or re-summarize it — spend your words on progress since then.
 
-Drop verbose tool output, redundant reasoning, and anything already superseded. Write a concise, self-contained summary the agent can resume from without losing track of its files or its plan.
+Write a tight, self-contained summary under these headings. Put "None" under any heading with nothing to report.
+
+## PLAN STATE
+The current todo list — which items are done, which one is in progress, which remain. If there is no explicit plan, state what has been accomplished and what is left.
+
+## WORKSPACE & FILES
+Every virtual path in play — the workspace, uploads, and outputs mounts — and each specific file created, modified, or read, with a few words on what each contains. These are how the agent finds its work; never drop a path.
+
+## DELIVERABLES
+Files already presented to the user via present_files, and anything still owed.
+
+## FINDINGS & DECISIONS
+Key results, values, and commands that worked, plus choices made and the reason for them, that the agent must not rediscover or reverse. Note rejected approaches and why.
+
+## OPEN QUESTIONS
+Anything unresolved or still awaiting a result.
+
+Drop verbose tool output, step-by-step reasoning, and anything already superseded. Be specific and concise.
 
 <messages>
 {messages}
