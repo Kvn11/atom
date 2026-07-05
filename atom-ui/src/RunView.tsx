@@ -31,7 +31,7 @@ export function RunView({ runId, onBack }: { runId: string; onBack: () => void }
       const m = await api.run(runId).catch(() => null);
       if (live && m) {
         setManifest(m);
-        api.artifacts(runId).then(setArts).catch(() => { /* ignore */ });
+        api.artifacts(runId).then((a) => { if (live) setArts(a); }).catch(() => { /* ignore */ });
         if (m.status === "complete" || m.status === "halted") return;
       }
       if (live) timer = setTimeout(tick, 1500);
