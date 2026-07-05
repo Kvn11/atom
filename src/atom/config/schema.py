@@ -50,6 +50,7 @@ class LibraryConfig(_Base):
 
 class WorkflowConfig(_Base):
     # Max tasks run concurrently within a single step; per-task wall-clock timeout.
+    # 0 or negative disables the per-task timeout.
     max_parallel: int = 4
     task_timeout_seconds: int = 1800
 

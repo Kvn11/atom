@@ -25,7 +25,7 @@ library:
 
 workflow:
   max_parallel: 4          # tasks run concurrently within a step
-  task_timeout_seconds: 1800
+  task_timeout_seconds: 1800   # 0 or negative disables the per-task timeout
 
 guardrails:
   enabled: false           # dormant seam; turn on to gate tool calls (e.g. bash)
