@@ -52,3 +52,36 @@ def test_summary_prompt_keeps_placeholder_and_notes_pin():
     assert "verbatim" in text.lower()
     assert "## PLAN STATE" in text              # checklist structure present
     assert "## WORKSPACE & FILES" in text
+
+
+def test_lead_prompt_keeps_contract_and_adds_discipline(base_config):
+    from atom.agent import render_lead_system_prompt
+
+    prof = base_config.profile("default")
+    out = render_lead_system_prompt(
+        base_config, prof, "default", {"supports_vision": True},
+        frequent_tool_names=["read_file", "bash", "write_todos"],
+        has_tool_library=True, has_skill_library=False,
+    )
+    assert "read_file" in out and "bash" in out          # tool-name contract preserved
+    assert "search_tools" in out and "search_skills" not in out
+    assert "present_files" in out                         # deliverable discipline
+    assert "Plan before you act" in out                   # planning discipline anchor
+
+
+def test_subagent_prompts_render_and_report_contract():
+    from atom.prompts.render import render_prompt
+
+    ctx = {
+        "date": "2026-07-05",
+        "workspace": "/w",
+        "uploads": "/u",
+        "outputs": "/o",
+        "frequent_tool_names": ["read_file", "write_file"],
+    }
+    for ref in ("@prompts/subagent_general.md", "@prompts/subagent_bash.md"):
+        out = render_prompt(ref, ctx)
+        assert "read_file" in out                          # tool list rendered
+        assert "self-contained report" in out              # return-value contract
+    bash_out = render_prompt("@prompts/subagent_bash.md", ctx)
+    assert "bash" in bash_out
