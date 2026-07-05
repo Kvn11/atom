@@ -4,7 +4,7 @@ from __future__ import annotations
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from atom.workflow.run_store import (
-    RunManifest, RunStore, StepState, TaskState, serialize_messages,
+    ArtifactRef, RunManifest, RunStore, StepState, TaskState, serialize_messages,
 )
 
 
@@ -65,3 +65,53 @@ def test_serialize_messages_shape():
     assert out[1]["tool_calls"] == [{"name": "write_file", "args": {"path": "p"}}]
     assert out[2]["role"] == "tool" and out[2]["name"] == "write_file"
     assert out[3]["text"] == "done"
+
+
+def test_capture_artifacts_copies_and_snapshots(atom_home):
+    store = RunStore(str(atom_home))
+    store.create(_manifest("rc", store.workspace_dir("rc")))
+    src = store.workspace_dir("rc") / "poem.md"
+    src.write_text("draft\n")
+    refs = store.capture_artifacts(
+        "rc", 0, "poet_a",
+        [{"path": "/mnt/user-data/outputs/poem.md", "physical": str(src)}],
+    )
+    assert len(refs) == 1
+    assert refs[0].name == "poem.md"
+    assert refs[0].rel == "s0__poet_a/poem.md"
+    assert refs[0].size == len("draft\n")
+    dest = store.artifacts_dir("rc") / "s0__poet_a" / "poem.md"
+    assert dest.read_text() == "draft\n"
+    src.write_text("CHANGED\n")               # snapshot immutability
+    assert dest.read_text() == "draft\n"
+
+
+def test_capture_artifacts_skips_missing_source(atom_home):
+    store = RunStore(str(atom_home))
+    store.create(_manifest("rm", store.workspace_dir("rm")))
+    refs = store.capture_artifacts(
+        "rm", 0, "t1",
+        [{"path": "/mnt/x/gone.md", "physical": str(store.workspace_dir("rm") / "nope.md")}],
+    )
+    assert refs == []
+
+
+def test_capture_artifacts_disambiguates_collision(atom_home):
+    store = RunStore(str(atom_home))
+    store.create(_manifest("rd", store.workspace_dir("rd")))
+    a = store.workspace_dir("rd") / "a.md"; a.write_text("A\n")
+    sub = store.workspace_dir("rd") / "sub"; sub.mkdir()
+    b = sub / "a.md"; b.write_text("B\n")
+    refs = store.capture_artifacts("rd", 0, "t1", [
+        {"path": "/mnt/x/a.md", "physical": str(a)},
+        {"path": "/mnt/y/a.md", "physical": str(b)},
+    ])
+    assert sorted(r.name for r in refs) == ["a-1.md", "a.md"]
+
+
+def test_artifact_path_confined(atom_home):
+    store = RunStore(str(atom_home))
+    store.create(_manifest("rp", store.workspace_dir("rp")))
+    ok = store.artifact_path("rp", "s0__t1/f.md")
+    assert ok is not None and str(ok).endswith("/artifacts/s0__t1/f.md")
+    assert store.artifact_path("rp", "../../run.json") is None

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from pathlib import Path
 from typing import Any, Optional, Union
 
@@ -10,6 +11,13 @@ from pydantic import BaseModel, Field
 
 from atom.messages import message_text
 from atom.sandbox.paths import atom_home
+
+
+class ArtifactRef(BaseModel):
+    name: str            # display name (basename, possibly disambiguated)
+    path: str            # original virtual path as presented
+    rel: str             # path relative to runs/<run_id>/artifacts/, used for serving
+    size: int            # bytes
 
 
 class TaskState(BaseModel):
@@ -21,6 +29,7 @@ class TaskState(BaseModel):
     started_at: Optional[str] = None
     ended_at: Optional[str] = None
     error: Optional[str] = None
+    artifacts: list[ArtifactRef] = Field(default_factory=list)
 
 
 class StepState(BaseModel):
@@ -73,6 +82,9 @@ class RunStore:
     def workspace_dir(self, run_id: str) -> Path:
         return self.run_dir(run_id) / "workspace"
 
+    def artifacts_dir(self, run_id: str) -> Path:
+        return self.run_dir(run_id) / "artifacts"
+
     def _manifest_path(self, run_id: str) -> Path:
         return self.run_dir(run_id) / "run.json"
 
@@ -116,3 +128,51 @@ class RunStore:
     def load_chat(self, run_id: str, step_index: int, task_id: str) -> Optional[list[dict]]:
         p = self.chat_path(run_id, step_index, task_id)
         return json.loads(p.read_text("utf-8")) if p.exists() else None
+
+    def capture_artifacts(
+        self, run_id: str, step_index: int, task_id: str, presented: list[dict]
+    ) -> list[ArtifactRef]:
+        """Copy each presented file into artifacts/s<i>__<task>/ (immutable snapshot).
+
+        Best-effort: a missing/unreadable source is skipped, never raised. Basename
+        collisions within one task are disambiguated (name.md -> name-1.md).
+        """
+        refs: list[ArtifactRef] = []
+        if not presented:
+            return refs
+        dest_dir = self.artifacts_dir(run_id) / f"s{step_index}__{task_id}"
+        used: set[str] = set()
+        for item in presented:
+            physical = item.get("physical")
+            virtual = item.get("path") or physical or ""
+            if not physical:
+                continue
+            src = Path(physical)
+            try:
+                if not src.is_file():
+                    continue
+                base = Path(virtual).name or src.name
+                name = base
+                i = 1
+                while name in used:
+                    stem, dot, ext = base.partition(".")
+                    name = f"{stem}-{i}{dot}{ext}" if dot else f"{base}-{i}"
+                    i += 1
+                used.add(name)
+                dest_dir.mkdir(parents=True, exist_ok=True)
+                dest = dest_dir / name
+                shutil.copyfile(src, dest)
+                refs.append(ArtifactRef(
+                    name=name, path=virtual,
+                    rel=f"s{step_index}__{task_id}/{name}", size=dest.stat().st_size,
+                ))
+            except OSError:
+                continue
+        return refs
+
+    def artifact_path(self, run_id: str, rel: str) -> Optional[Path]:
+        base = self.artifacts_dir(run_id).resolve()
+        target = (base / rel).resolve()
+        if target != base and not str(target).startswith(str(base) + os.sep):
+            return None
+        return target
