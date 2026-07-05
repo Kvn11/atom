@@ -68,3 +68,23 @@ def test_middleware_order_invariants(base_config, atom_home):
     assert isinstance(chain[-1], ClarificationMiddleware)  # INVARIANT: last
     types = [type(m).__name__ for m in chain]
     assert "TodoListMiddleware" in types and "SubagentMiddleware" in types
+
+
+def test_instruction_pin_and_trim_are_wired(base_config, atom_home):
+    """InstructionPinMiddleware is in the chain and the compaction middleware reads 8000 tokens."""
+    from atom.agent import _build_middlewares
+    from atom.library import load_library
+    from atom.middleware.compaction import PinnedSummarizationMiddleware
+    from atom.middleware.instruction_pin import InstructionPinMiddleware
+    from atom.sandbox.provider import LocalSandboxProvider
+
+    prepared = make_prepared([])
+    profile = base_config.profile("default")
+    provider = LocalSandboxProvider()
+    library = load_library(str(atom_home))
+    chain = _build_middlewares(
+        base_config, profile, prepared, provider, str(atom_home), prepared.model, library
+    )
+    assert any(isinstance(m, InstructionPinMiddleware) for m in chain)
+    comp = next(m for m in chain if isinstance(m, PinnedSummarizationMiddleware))
+    assert comp.trim_tokens_to_summarize == 8000

@@ -152,3 +152,7 @@ def test_trim_tokens_defaults_to_library_default_when_unset():
     model = ScriptedChatModel(responses=[], profile={"max_input_tokens": 200_000})
     mw = build_compaction_middleware(model, context_window=200_000)
     assert mw.trim_tokens_to_summarize == 4000
+
+
+def test_summary_input_tokens_config_default(base_config):
+    assert base_config.compaction.summary_input_tokens == 8000

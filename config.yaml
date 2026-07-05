@@ -17,6 +17,7 @@ sandbox:
 compaction:
   ratio: 0.5               # summarize once input reaches 50% of the model's context window
   keep_messages: 20
+  summary_input_tokens: 8000   # how much history the summarizer reads (trim_tokens_to_summarize)
 
 library:
   search: bm25

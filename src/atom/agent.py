@@ -176,6 +176,7 @@ def _build_middlewares(
     from atom.middleware.compaction import build_compaction_middleware
     from atom.middleware.dangling_tool_call import DanglingToolCallMiddleware
     from atom.middleware.deferred_tools import DeferredToolFilterMiddleware
+    from atom.middleware.instruction_pin import InstructionPinMiddleware
     from atom.middleware.llm_error import LLMErrorHandlingMiddleware
     from atom.middleware.loop_detection import LoopDetectionMiddleware
     from atom.middleware.sandbox import SandboxMiddleware
@@ -214,6 +215,7 @@ def _build_middlewares(
         compaction_ratio=cfg.compaction.ratio,
         max_concurrent=max_sub,
         timeout_seconds=profile.subagents.timeout_seconds,
+        summary_input_tokens=cfg.compaction.summary_input_tokens,
     )
     deferred_names = library.deferred_tool_names()
 
@@ -222,6 +224,7 @@ def _build_middlewares(
         ThreadDataMiddleware(home=home),                 # 1. FIRST — provision/bind workspace
         SandboxMiddleware(provider, home=home),          # 2. acquire + register sandbox (docker seam)
         UploadsMiddleware(home=home),                    # register read-only uploads
+        InstructionPinMiddleware(),                      # capture first user instruction (pin)
         # --- before_model (forward) ---
         DanglingToolCallMiddleware(),                    # 3. repair orphaned tool calls
         build_compaction_middleware(                     # 4. 50%-of-window summarization
@@ -230,6 +233,7 @@ def _build_middlewares(
             ratio=cfg.compaction.ratio,
             keep_messages=cfg.compaction.keep_messages,
             summary_prompt=summary_prompt,
+            trim_tokens=cfg.compaction.summary_input_tokens,
         ),
         # --- wrap_model_call (outer -> inner by position) ---
         LLMErrorHandlingMiddleware(),                    # 5. outermost: retry/normalize provider errors

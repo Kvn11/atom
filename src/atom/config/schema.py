@@ -35,6 +35,9 @@ class CompactionConfig(_Base):
     # Fraction of the selected model's context window that triggers summarization (deviation #5).
     ratio: float = 0.5
     keep_messages: int = 20
+    # How much conversation history the summarizer reads when building a summary
+    # (trim_tokens_to_summarize). Higher = richer summaries at more summarizer cost.
+    summary_input_tokens: int = 8000
 
 
 class SubagentConfig(_Base):
