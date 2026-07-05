@@ -1,6 +1,6 @@
 # workflows/parallel-poems.yaml — copy to $ATOM_HOME/workflows/ to run it.
 name: parallel-poems
-description: Draft poems in parallel, then refine them in place.
+description: Draft poems in parallel, then refine them and compile an anthology.
 inputs:
   - name: topic
     required: true
@@ -10,24 +10,24 @@ inputs:
     default: free verse
 steps:
   - title: Draft
-    description: Three poets each draft one poem into the shared workspace.
+    description: Three poets each draft one poem into the shared workspace and present it.
     tasks:
       - id: poet_a
-        prompt: "Write a {{ style }} poem about {{ topic }}. Save it as poem_a.md in {{ workspace }}."
+        prompt: "Write a {{ style }} poem about {{ topic }}. Save it as poem_a.md in {{ workspace }}, then call present_files on poem_a.md."
         model: haiku
         thinking: low
       - id: poet_b
-        prompt: "Write a {{ style }} poem about {{ topic }} from a child's point of view. Save it as poem_b.md in {{ workspace }}."
+        prompt: "Write a {{ style }} poem about {{ topic }} from a child's point of view. Save it as poem_b.md in {{ workspace }}, then call present_files on poem_b.md."
         model: haiku
         thinking: low
       - id: poet_c
-        prompt: "Write a {{ style }} poem about {{ topic }} as a strict sonnet. Save it as poem_c.md in {{ workspace }}."
+        prompt: "Write a {{ style }} poem about {{ topic }} as a strict sonnet. Save it as poem_c.md in {{ workspace }}, then call present_files on poem_c.md."
         model: haiku
         thinking: low
   - title: Refine
-    description: One editor sharpens every draft.
+    description: One editor sharpens every draft, compiles an anthology, and presents the finished set.
     tasks:
       - id: refiner
-        prompt: "Read every poem_*.md in {{ workspace }} and sharpen each for imagery and rhythm, saving each back in place."
+        prompt: "Read every poem_*.md in {{ workspace }} and sharpen each for imagery and rhythm, saving each back in place. Then compile all three into anthology.md in {{ workspace }} with a title and each poem under a heading. Finally, call present_files on poem_a.md, poem_b.md, poem_c.md, and anthology.md."
         model: haiku
         thinking: medium
