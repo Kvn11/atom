@@ -30,6 +30,10 @@ def _provider(td, sd, wf):
             "name": "write_file",
             "args": {"description": "w", "path": f"{WS}/out.txt", "content": "hi\n"},
             "id": "c1", "type": "tool_call"}]),
+        AIMessage(content="", tool_calls=[{
+            "name": "present_files",
+            "args": {"filepaths": [f"{WS}/out.txt"]},
+            "id": "c2", "type": "tool_call"}]),
         AIMessage(content="done"),
     ])
 
@@ -59,8 +63,9 @@ async def test_submit_run_and_fetch_results(base_config, atom_home):
         assert manifest["status"] == "complete"
 
         arts = (await client.get(f"/api/runs/{run_id}/artifacts")).json()
-        assert any(a["path"] == "out.txt" for a in arts)
-        body = (await client.get(f"/api/runs/{run_id}/artifacts/out.txt")).text
+        art = next(a for a in arts if a["name"] == "out.txt")
+        assert art["step"] == 0 and art["task"] == "t1" and art["rel"] == "s0__t1/out.txt"
+        body = (await client.get(f"/api/runs/{run_id}/artifacts/{art['rel']}")).text
         assert body == "hi\n"
 
         msgs = (await client.get(f"/api/runs/{run_id}/tasks/0/t1/messages")).json()
@@ -75,3 +80,34 @@ async def test_missing_required_input_is_422(base_config, atom_home):
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as client:
         r = await client.post("/api/runs", json={"workflow": "demo", "inputs": {}})
         assert r.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_runs_list_returns_paginated_summaries(base_config, atom_home):
+    _seed(atom_home)
+    engine = WorkflowEngine(base_config, prepared_provider=_provider)
+    app = create_app(base_config, engine=engine)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as client:
+        r = await client.post("/api/runs", json={"workflow": "demo", "inputs": {"topic": "x"}})
+        run_id = r.json()["run_id"]
+        await _poll(client, run_id)
+
+        page = (await client.get("/api/runs?status=all&limit=50&offset=0")).json()
+        assert page["total"] >= 1
+        assert any(i["run_id"] == run_id for i in page["items"])
+        assert set(page["counts"]) == {"active", "complete", "halted"}
+        item = next(i for i in page["items"] if i["run_id"] == run_id)
+        assert item["tasks_total"] == 1 and item["workflow"] == "demo"
+
+
+@pytest.mark.asyncio
+async def test_unknown_artifact_is_404(base_config, atom_home):
+    _seed(atom_home)
+    engine = WorkflowEngine(base_config, prepared_provider=_provider)
+    app = create_app(base_config, engine=engine)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as client:
+        r = await client.post("/api/runs", json={"workflow": "demo", "inputs": {"topic": "x"}})
+        run_id = r.json()["run_id"]
+        await _poll(client, run_id)
+        resp = await client.get(f"/api/runs/{run_id}/artifacts/s0__t1/does-not-exist.txt")
+        assert resp.status_code == 404

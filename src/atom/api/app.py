@@ -5,12 +5,13 @@ Automation flow: POST /api/runs (submit) -> poll GET /api/runs/{id} -> GET .../a
 from __future__ import annotations
 
 import datetime
+import mimetypes
 import uuid
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import FileResponse
 
 from atom.api.models import RunRequest
 from atom.config import load_config
@@ -67,8 +68,8 @@ def create_app(cfg: AtomConfig | None = None, engine: WorkflowEngine | None = No
         return {"run_id": run_id, "status": "pending"}
 
     @app.get("/api/runs")
-    def get_runs() -> list:
-        return [m.model_dump() for m in store.list()]
+    def get_runs(status: str = "all", limit: int = 50, offset: int = 0) -> dict:
+        return store.list_summaries(status=status, limit=limit, offset=offset)
 
     @app.get("/api/runs/{run_id}")
     def get_run(run_id: str) -> dict:
@@ -86,26 +87,24 @@ def create_app(cfg: AtomConfig | None = None, engine: WorkflowEngine | None = No
 
     @app.get("/api/runs/{run_id}/artifacts")
     def get_artifacts(run_id: str) -> list:
-        ws = store.workspace_dir(run_id)
-        if not ws.is_dir():
+        try:
+            m = store.load(run_id)
+        except FileNotFoundError:
             raise HTTPException(404, "run not found")
         out = []
-        for p in sorted(ws.rglob("*")):
-            if p.is_file():
-                st = p.stat()
-                out.append({"path": str(p.relative_to(ws)), "size": st.st_size,
-                            "modified": st.st_mtime})
+        for s in m.steps:
+            for t in s.tasks:
+                for a in t.artifacts:
+                    out.append({**a.model_dump(), "step": s.index, "task": t.id})
         return out
 
-    @app.get("/api/runs/{run_id}/artifacts/{path:path}", response_class=PlainTextResponse)
-    def get_artifact(run_id: str, path: str) -> str:
-        ws = store.workspace_dir(run_id).resolve()
-        target = (ws / path).resolve()
-        if target != ws and not str(target).startswith(str(ws) + "/"):
+    @app.get("/api/runs/{run_id}/artifacts/{rel:path}")
+    def get_artifact(run_id: str, rel: str):
+        target = store.artifact_path(run_id, rel)
+        if target is None or not target.is_file():
             raise HTTPException(404, "artifact not found")
-        if not target.is_file():
-            raise HTTPException(404, "artifact not found")
-        return target.read_text(encoding="utf-8", errors="replace")
+        media_type = mimetypes.guess_type(target.name)[0] or "text/plain"
+        return FileResponse(target, media_type=media_type)
 
     if _UI_DIST.is_dir():  # serve the built SPA when present (prod); tests hit /api only
         from fastapi.staticfiles import StaticFiles
