@@ -48,6 +48,25 @@ Everything persists per thread under `$ATOM_HOME` (default `~/.atom`); resume a 
 - Local **sandbox** with path confinement; `bash` on by default (⚠️ no container isolation yet —
   docker is Phase 2). A dormant `GuardrailMiddleware` can gate commands.
 
+## Workflows
+
+Run many agents as ordered **steps** of parallel **tasks** sharing one workspace.
+
+```bash
+cp workflows/parallel-poems.yaml ~/.atom/workflows/          # make it discoverable
+atom workflow list
+atom workflow run parallel-poems --input topic="the tide" --input style=haiku
+atom serve                                                   # REST API + web UI at http://127.0.0.1:8000
+```
+
+A workflow is defined in YAML (`$ATOM_HOME/workflows/<name>.yaml`): workflow-level `inputs`
+(required/optional, used in task prompts via `{{ topic }}`), ordered `steps`, and each step's
+`tasks` (a `prompt` plus optional `model`/`thinking`). Tasks in a step run in parallel; a step
+advances only if **all** its tasks succeed, otherwise the run halts. Later steps read what earlier
+steps wrote to the shared workspace. Set `LANGSMITH_TRACING=true` + `LANGSMITH_API_KEY` to trace
+each task (tagged by workflow/step/task). The API (`atom serve`) is automation-first: `POST
+/api/runs` to submit a job, poll `GET /api/runs/{id}`, then `GET /api/runs/{id}/artifacts`.
+
 ## Configure (`config.yaml`)
 
 The whole harness is config-driven. An **agent profile** defines one project's lead agent:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import uuid
 import warnings
 from pathlib import Path
 
@@ -125,6 +126,109 @@ def threads(config: str = typer.Option(None, "--config", "-c")) -> None:
             continue
         for thread_dir in sorted(tdir.iterdir()):
             console.print(f"{user_dir.name}/{thread_dir.name}  [dim]{thread_dir}[/dim]")
+
+
+# --------------------------------------------------------------------------- workflows
+workflow_app = typer.Typer(help="Run multi-agent workflows (Steps x Tasks).")
+app.add_typer(workflow_app, name="workflow")
+
+
+@workflow_app.command("list")
+def workflow_list(config: str = typer.Option(None, "--config", "-c")) -> None:
+    """List available workflow definitions in $ATOM_HOME/workflows."""
+    from atom.workflow.schema import list_workflows
+
+    cfg = load_config(config)
+    wfs = list_workflows(cfg.home)
+    if not wfs:
+        console.print("[dim]No workflows found. Add YAML files under $ATOM_HOME/workflows.[/dim]")
+        return
+    for w in wfs:
+        console.print(f"[bold]{w.name}[/bold]  [dim]{w.description or ''}[/dim]")
+
+
+@workflow_app.command("run")
+def workflow_run(
+    name: str = typer.Argument(..., help="Workflow name."),
+    input: list[str] = typer.Option(None, "--input", "-i", help="key=value (repeatable)."),
+    profile: str = typer.Option(None, "--profile", "-p"),
+    config: str = typer.Option(None, "--config", "-c"),
+) -> None:
+    """Submit a workflow and poll it to completion."""
+    import datetime
+
+    from atom.workflow.engine import WorkflowEngine
+    from atom.workflow.schema import load_workflow, MissingInputError
+
+    _load_env()
+
+    # Check for malformed --input tokens (missing =)
+    if input:
+        for token in input:
+            if "=" not in token:
+                console.print(f"[red]Error: --input must be KEY=VALUE, got: {token}[/red]")
+                raise typer.Exit(1)
+
+    cfg = load_config(config)
+
+    try:
+        wf = load_workflow(name, cfg.home)
+    except FileNotFoundError:
+        console.print(f"[red]Error: workflow '{name}' not found[/red]")
+        raise typer.Exit(1)
+
+    inputs = dict(kv.split("=", 1) for kv in (input or []) if "=" in kv)
+    engine = WorkflowEngine(cfg, profile=profile)
+    run_id = uuid.uuid4().hex[:12]
+
+    try:
+        engine.create_run(wf, inputs, run_id, datetime.datetime.now().isoformat(timespec="seconds"))
+    except MissingInputError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1)
+
+    with console.status(f"[bold]running workflow {name}…[/bold]"):
+        manifest = asyncio.run(engine.execute(run_id))
+    for step in manifest.steps:
+        marks = ", ".join(f"{t.id}:{t.status}" for t in step.tasks)
+        console.print(f"  [bold]{step.title}[/bold] [dim]{step.status}[/dim] — {marks}")
+    color = "green" if manifest.status == "complete" else "red"
+    console.print(f"\n[{color} bold]{manifest.status}[/{color} bold]  [dim]run: {run_id}[/dim]")
+    ws = engine.store.workspace_dir(run_id)
+    files = [p for p in ws.rglob("*") if p.is_file()] if ws.is_dir() else []
+    if files:
+        console.print("[bold]Artifacts:[/bold]")
+        for p in files:
+            console.print(f"  • {p.relative_to(ws)}")
+
+
+@workflow_app.command("runs")
+def workflow_runs(config: str = typer.Option(None, "--config", "-c")) -> None:
+    """List workflow runs."""
+    from atom.workflow.run_store import RunStore
+
+    cfg = load_config(config)
+    runs = RunStore(cfg.home).list()
+    if not runs:
+        console.print("[dim]No runs yet.[/dim]")
+        return
+    for m in runs:
+        console.print(f"{m.run_id}  [bold]{m.workflow}[/bold]  [dim]{m.status}  {m.created_at}[/dim]")
+
+
+@app.command()
+def serve(
+    host: str = typer.Option("127.0.0.1", "--host"),
+    port: int = typer.Option(8000, "--port"),
+    config: str = typer.Option(None, "--config", "-c"),
+) -> None:
+    """Launch the workflow API + UI server."""
+    import uvicorn
+
+    from atom.api.app import create_app
+
+    _load_env()
+    uvicorn.run(create_app(load_config(config)), host=host, port=port)
 
 
 if __name__ == "__main__":

@@ -58,6 +58,15 @@ def _build_context(cfg: AtomConfig, *, user_id, thread_id, profile_name, home, w
     }
 
 
+def _apply_trace(run_config: dict, trace: dict | None) -> dict:
+    """Merge LangSmith run_name/tags/metadata into a LangGraph run config (in place)."""
+    if trace:
+        for key in ("run_name", "tags", "metadata"):
+            if trace.get(key) is not None:
+                run_config[key] = trace[key]
+    return run_config
+
+
 async def run_agent(
     task: str,
     *,
@@ -70,6 +79,7 @@ async def run_agent(
     override_model: str | None = None,
     override_thinking: str | int | None = None,
     override_system_prompt: str | None = None,
+    trace: dict | None = None,
     prepared: PreparedModel | None = None,
 ) -> RunResult:
     """Run the lead agent on ``task`` and return the final result.
@@ -103,7 +113,9 @@ async def run_agent(
             cfg, profile_name, prepared=prepared, checkpointer=cp,
             override_system_prompt=override_system_prompt,
         )
-        run_config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 100}
+        run_config = _apply_trace(
+            {"configurable": {"thread_id": thread_id}, "recursion_limit": 100}, trace
+        )
         result = await agent.ainvoke(
             {"messages": [HumanMessage(content=content)]},
             config=run_config,
