@@ -104,7 +104,13 @@ def create_app(cfg: AtomConfig | None = None, engine: WorkflowEngine | None = No
         if target is None or not target.is_file():
             raise HTTPException(404, "artifact not found")
         media_type = mimetypes.guess_type(target.name)[0] or "text/plain"
-        return FileResponse(target, media_type=media_type)
+        # Script-capable types must not render inline on direct navigation (defense-in-depth).
+        # The SPA is unaffected: it fetches text via JS (fetch().text()) and loads images via
+        # <img>, neither of which honors Content-Disposition on a subresource.
+        headers = None
+        if media_type in ("text/html", "image/svg+xml"):
+            headers = {"Content-Disposition": f'attachment; filename="{target.name}"'}
+        return FileResponse(target, media_type=media_type, headers=headers)
 
     if _UI_DIST.is_dir():  # serve the built SPA when present (prod); tests hit /api only
         from fastapi.staticfiles import StaticFiles

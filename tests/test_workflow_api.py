@@ -111,3 +111,33 @@ async def test_unknown_artifact_is_404(base_config, atom_home):
         await _poll(client, run_id)
         resp = await client.get(f"/api/runs/{run_id}/artifacts/s0__t1/does-not-exist.txt")
         assert resp.status_code == 404
+
+
+def _html_provider(td, sd, wf):
+    return make_prepared([
+        AIMessage(content="", tool_calls=[{
+            "name": "write_file",
+            "args": {"description": "w", "path": f"{WS}/page.html", "content": "<b>hi</b>\n"},
+            "id": "c1", "type": "tool_call"}]),
+        AIMessage(content="", tool_calls=[{
+            "name": "present_files",
+            "args": {"filepaths": [f"{WS}/page.html"]},
+            "id": "c2", "type": "tool_call"}]),
+        AIMessage(content="done"),
+    ])
+
+
+@pytest.mark.asyncio
+async def test_html_artifact_served_as_attachment(base_config, atom_home):
+    _seed(atom_home)
+    engine = WorkflowEngine(base_config, prepared_provider=_html_provider)
+    app = create_app(base_config, engine=engine)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as client:
+        r = await client.post("/api/runs", json={"workflow": "demo", "inputs": {"topic": "x"}})
+        run_id = r.json()["run_id"]
+        await _poll(client, run_id)
+        arts = (await client.get(f"/api/runs/{run_id}/artifacts")).json()
+        rel = next(a["rel"] for a in arts if a["name"] == "page.html")
+        resp = await client.get(f"/api/runs/{run_id}/artifacts/{rel}")
+        assert resp.status_code == 200
+        assert "attachment" in resp.headers.get("content-disposition", "")
