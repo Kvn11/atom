@@ -1,132 +1,54 @@
 import { useEffect, useState } from "react";
-import { api, Artifact, ChatMsg, Manifest, Workflow } from "./api";
+import { api, Workflow } from "./api";
+import { Workflows, RunForm } from "./Workflows";
+import { RunsDashboard } from "./RunsDashboard";
+import { RunView } from "./RunView";
 
 type View =
-  | { name: "list" }
+  | { name: "workflows" }
   | { name: "form"; workflow: Workflow }
+  | { name: "runs" }
   | { name: "run"; runId: string };
 
 export default function App() {
-  const [view, setView] = useState<View>({ name: "list" });
-  return (
-    <div className="app">
-      <header onClick={() => setView({ name: "list" })}>⚛ atom workflows</header>
-      {view.name === "list" && <WorkflowList onPick={(w) => setView({ name: "form", workflow: w })} />}
-      {view.name === "form" && (
-        <RunForm workflow={view.workflow} onStarted={(id) => setView({ name: "run", runId: id })} />
-      )}
-      {view.name === "run" && <RunView runId={view.runId} />}
-    </div>
-  );
-}
-
-function WorkflowList({ onPick }: { onPick: (w: Workflow) => void }) {
-  const [wfs, setWfs] = useState<Workflow[]>([]);
-  useEffect(() => { api.workflows().then(setWfs).catch(console.error); }, []);
-  return (
-    <div className="panel">
-      <h2>Workflows</h2>
-      {wfs.map((w) => (
-        <div key={w.name} className="card" onClick={() => onPick(w)}>
-          <strong>{w.name}</strong>
-          <div className="dim">{w.description}</div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function RunForm({ workflow, onStarted }: { workflow: Workflow; onStarted: (id: string) => void }) {
-  const [values, setValues] = useState<Record<string, string>>({});
-  const [error, setError] = useState<string>("");
-  const submit = async () => {
-    setError("");
-    try {
-      const { run_id } = await api.submit(workflow.name, values);
-      onStarted(run_id);
-    } catch (e) {
-      setError(String(e instanceof Error ? e.message : e));
-    }
-  };
-  return (
-    <div className="panel">
-      <h2>{workflow.name}</h2>
-      {workflow.inputs.map((i) => (
-        <label key={i.name} className="field">
-          {i.name}{i.required ? " *" : ""}
-          <input
-            placeholder={i.default ?? ""}
-            onChange={(e) => setValues((v) => ({ ...v, [i.name]: e.target.value }))}
-          />
-        </label>
-      ))}
-      <button onClick={submit}>Start run</button>
-      {error && <div className="error">{error}</div>}
-    </div>
-  );
-}
-
-function RunView({ runId }: { runId: string }) {
-  const [manifest, setManifest] = useState<Manifest | null>(null);
-  const [sel, setSel] = useState<{ step: number; task: string } | null>(null);
-  const [chat, setChat] = useState<ChatMsg[]>([]);
-  const [arts, setArts] = useState<Artifact[]>([]);
+  const [view, setView] = useState<View>({ name: "workflows" });
+  const [active, setActive] = useState(0);
 
   useEffect(() => {
     let live = true;
+    let timer: ReturnType<typeof setTimeout>;
     const tick = async () => {
-      const m = await api.run(runId).catch(() => null);
-      if (live && m) {
-        setManifest(m);
-        api.artifacts(runId).then(setArts).catch(() => {});
-        if (m.status === "complete" || m.status === "halted") return;
-      }
-      if (live) setTimeout(tick, 1500);
+      try { const p = await api.runs("all", 1, 0); if (live) setActive(p.counts.active); } catch { /* ignore */ }
+      if (live) timer = setTimeout(tick, 4000);
     };
     tick();
-    return () => { live = false; };
-  }, [runId]);
+    return () => { live = false; clearTimeout(timer); };
+  }, []);
 
-  useEffect(() => {
-    if (!sel) return;
-    api.messages(runId, sel.step, sel.task).then(setChat).catch(() => setChat([]));
-  }, [sel, runId, manifest?.status]);
+  const tab = view.name === "form" ? "workflows" : view.name === "run" ? "runs" : view.name;
 
-  if (!manifest) return <div className="panel">Loading…</div>;
   return (
-    <div className="run">
-      <div className="steps">
-        <h2>{manifest.workflow} <span className={`badge ${manifest.status}`}>{manifest.status}</span></h2>
-        {manifest.steps.map((s) => (
-          <div key={s.index} className="step">
-            <div className="step-title">{s.title} <span className="dim">{s.status}</span></div>
-            {s.tasks.map((t) => (
-              <div
-                key={t.id}
-                className={`task ${t.status} ${sel?.task === t.id && sel?.step === s.index ? "active" : ""}`}
-                onClick={() => setSel({ step: s.index, task: t.id })}
-              >
-                {t.id} <span className="dim">{t.status}</span>
-              </div>
-            ))}
-          </div>
-        ))}
-        <h3>Artifacts</h3>
-        {arts.map((a) => (
-          <div key={a.path} className="artifact" onClick={() => api.artifact(runId, a.path).then(alert).catch((e) => alert(String(e)))}>
-            {a.path} <span className="dim">{a.size}b</span>
-          </div>
-        ))}
-      </div>
-      <div className="chat">
-        <h3>{sel ? `${sel.task} (step ${sel.step})` : "Select a task"}</h3>
-        {chat.map((m, i) => (
-          <div key={i} className={`msg ${m.role}`}>
-            <div className="role">{m.name || m.role}</div>
-            <div className="text">{m.text || (m.tool_calls ? `→ ${m.tool_calls.map((c) => c.name).join(", ")}` : "")}</div>
-          </div>
-        ))}
-      </div>
+    <div className="app">
+      <header className="topbar">
+        <div className="brand" onClick={() => setView({ name: "workflows" })}>
+          <span className="glyph">⚛</span> atom
+        </div>
+        <nav className="tabs">
+          <button className={tab === "workflows" ? "on" : ""} onClick={() => setView({ name: "workflows" })}>Workflows</button>
+          <button className={tab === "runs" ? "on" : ""} onClick={() => setView({ name: "runs" })}>
+            Runs{active > 0 && <span className="count">{active}</span>}
+          </button>
+        </nav>
+      </header>
+      <main>
+        {view.name === "workflows" && <Workflows onPick={(w) => setView({ name: "form", workflow: w })} />}
+        {view.name === "form" && (
+          <RunForm workflow={view.workflow} onStarted={(id) => setView({ name: "run", runId: id })}
+            onBack={() => setView({ name: "workflows" })} />
+        )}
+        {view.name === "runs" && <RunsDashboard onOpen={(id) => setView({ name: "run", runId: id })} />}
+        {view.name === "run" && <RunView runId={view.runId} onBack={() => setView({ name: "runs" })} />}
+      </main>
     </div>
   );
 }
