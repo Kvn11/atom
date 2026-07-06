@@ -76,6 +76,7 @@ def test_instruction_pin_and_trim_are_wired(base_config, atom_home):
     from atom.library import load_library
     from atom.middleware.compaction import PinnedSummarizationMiddleware
     from atom.middleware.instruction_pin import InstructionPinMiddleware
+    from atom.middleware.subagent import SubagentMiddleware
     from atom.sandbox.provider import LocalSandboxProvider
 
     prepared = make_prepared([])
@@ -88,3 +89,6 @@ def test_instruction_pin_and_trim_are_wired(base_config, atom_home):
     assert any(isinstance(m, InstructionPinMiddleware) for m in chain)
     comp = next(m for m in chain if isinstance(m, PinnedSummarizationMiddleware))
     assert comp.trim_tokens_to_summarize == 8000
+    # subagent runner inherits the profile's subagent recursion_limit (wiring guard)
+    sub = next(m for m in chain if isinstance(m, SubagentMiddleware))
+    assert sub.runner.recursion_limit == profile.subagents.recursion_limit == 300
