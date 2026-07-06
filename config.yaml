@@ -42,6 +42,7 @@ agents:
     system_prompt: "@prompts/lead_system.md"   # inline string OR @file
     user_prompt: null                  # optional wrapper for the incoming task
     summary_prompt: "@prompts/summary.md"      # compaction prompt (must keep the {messages} placeholder)
+    recursion_limit: 400               # max LangGraph super-steps per run; ~11/turn, so 400 ≈ 36 turns
     tools:
       frequent: [read_file, write_file, edit_file, bash, ls, grep, glob, present_files, view_image]
     skills:
@@ -49,3 +50,4 @@ agents:
     subagents:
       max_concurrent: 3
       timeout_seconds: 900
+      recursion_limit: 300             # same, for delegated child runs (~27 turns)

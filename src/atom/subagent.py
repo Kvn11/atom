@@ -58,9 +58,13 @@ class SubagentRunner:
     summary_prompt: str | None = None  # atom's summary.md (resolved, not Jinja-rendered); None -> library default
     max_concurrent: int = 3
     timeout_seconds: int = 900
+    recursion_limit: int = 300  # max LangGraph super-steps per child run (~N/11 agent turns)
 
     def __post_init__(self) -> None:
         self._sem = asyncio.Semaphore(clamp_concurrency(self.max_concurrent))
+
+    def _child_config(self, child_id: str) -> dict:
+        return {"configurable": {"thread_id": child_id}, "recursion_limit": self.recursion_limit}
 
     def _child_tools(self, subagent_type: SubagentType) -> list:
         # Note: children get file tools (+bash) but NOT delegate_task — no nested delegation.
@@ -139,7 +143,7 @@ class SubagentRunner:
                 result = await asyncio.wait_for(
                     agent.ainvoke(
                         {"messages": [HumanMessage(content=prompt)]},
-                        config={"configurable": {"thread_id": child_id}, "recursion_limit": 60},
+                        config=self._child_config(child_id),
                         context=context,
                     ),
                     timeout=self.timeout_seconds,

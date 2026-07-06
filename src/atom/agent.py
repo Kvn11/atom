@@ -217,6 +217,7 @@ def _build_middlewares(
         timeout_seconds=profile.subagents.timeout_seconds,
         summary_input_tokens=cfg.compaction.summary_input_tokens,
         summary_prompt=summary_prompt,
+        recursion_limit=profile.subagents.recursion_limit,
     )
     deferred_names = library.deferred_tool_names()
 

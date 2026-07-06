@@ -43,6 +43,9 @@ class CompactionConfig(_Base):
 class SubagentConfig(_Base):
     max_concurrent: int = 3  # clamped to [2, 4] at build time
     timeout_seconds: int = 900
+    # Max LangGraph super-steps per delegated child run. atom's middleware chain costs ~11
+    # super-steps per model turn, so this is ~N/11 agent turns (300 -> ~27 turns).
+    recursion_limit: int = 300
 
 
 class LibraryConfig(_Base):
@@ -91,6 +94,11 @@ class AgentProfile(_Base):
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     skills: SkillsConfig = Field(default_factory=SkillsConfig)
     subagents: SubagentConfig = Field(default_factory=SubagentConfig)
+    # Max LangGraph super-steps for a lead/workflow-task run. atom's middleware chain costs
+    # ~11 super-steps per model turn, so 400 -> ~36 turns (the old hardcoded 100 gave only ~9,
+    # which killed legitimate multi-step tasks mid-work). Loop detection remains the real
+    # runaway guard; this is a backstop, so keep it generous.
+    recursion_limit: int = 400
 
 
 class AtomConfig(_Base):

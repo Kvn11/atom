@@ -67,6 +67,18 @@ def _apply_trace(run_config: dict, trace: dict | None) -> dict:
     return run_config
 
 
+def build_run_config(thread_id: str, recursion_limit: int, trace: dict | None = None) -> dict:
+    """Assemble the LangGraph invoke config: thread id + recursion_limit (+ optional trace).
+
+    ``recursion_limit`` counts super-steps, not agent turns. atom's middleware chain spends
+    ~11 super-steps per turn, so this must be well above the intended turn count (see
+    ``AgentProfile.recursion_limit``).
+    """
+    return _apply_trace(
+        {"configurable": {"thread_id": thread_id}, "recursion_limit": recursion_limit}, trace
+    )
+
+
 async def run_agent(
     task: str,
     *,
@@ -113,9 +125,7 @@ async def run_agent(
             cfg, profile_name, prepared=prepared, checkpointer=cp,
             override_system_prompt=override_system_prompt,
         )
-        run_config = _apply_trace(
-            {"configurable": {"thread_id": thread_id}, "recursion_limit": 100}, trace
-        )
+        run_config = build_run_config(thread_id, prof.recursion_limit, trace)
         result = await agent.ainvoke(
             {"messages": [HumanMessage(content=content)]},
             config=run_config,
