@@ -216,6 +216,7 @@ def _build_middlewares(
         max_concurrent=max_sub,
         timeout_seconds=profile.subagents.timeout_seconds,
         summary_input_tokens=cfg.compaction.summary_input_tokens,
+        summary_prompt=summary_prompt,
     )
     deferred_names = library.deferred_tool_names()
 

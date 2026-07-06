@@ -55,6 +55,7 @@ class SubagentRunner:
     summarizer: BaseChatModel | None = None  # enables child compaction when set
     compaction_ratio: float = 0.5
     summary_input_tokens: int = 8000
+    summary_prompt: str | None = None  # atom's summary.md (resolved, not Jinja-rendered); None -> library default
     max_concurrent: int = 3
     timeout_seconds: int = 900
 
@@ -72,7 +73,8 @@ class SubagentRunner:
         return tools
 
     def _child_middleware(self) -> list:
-        """Minimal resilience so long-running children don't hard-fail on context overflow/loops."""
+        """Pin the delegated prompt and add minimal resilience (compaction, dangling-call repair,
+        tool-error, loop detection) so long-running children survive context overflow and loops."""
         from atom.middleware.dangling_tool_call import DanglingToolCallMiddleware
         from atom.middleware.instruction_pin import InstructionPinMiddleware
         from atom.middleware.loop_detection import LoopDetectionMiddleware
@@ -89,6 +91,7 @@ class SubagentRunner:
                     ratio=self.compaction_ratio,
                     keep_messages=15,
                     trim_tokens=self.summary_input_tokens,
+                    summary_prompt=self.summary_prompt,
                 )
             )
         mw += [ToolErrorHandlingMiddleware(), LoopDetectionMiddleware()]

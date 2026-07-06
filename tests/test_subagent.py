@@ -107,3 +107,26 @@ async def test_runner_unregistered_after_run(base_config):
     prepared = make_prepared([AIMessage(content="hi")])
     result = await run_agent("hi", config=base_config, prepared=prepared)
     assert get_runner(result.thread_id) is None  # no per-thread runner leak
+
+
+def test_child_middleware_pins_and_uses_atom_summary_prompt():
+    from atom.middleware.compaction import PinnedSummarizationMiddleware
+    from atom.middleware.instruction_pin import InstructionPinMiddleware
+    from atom.subagent import SubagentRunner
+    from tests.conftest import ScriptedChatModel
+
+    model = ScriptedChatModel(responses=[], profile={"max_input_tokens": 200_000})
+    runner = SubagentRunner(
+        model=model,
+        home="/tmp",
+        context_window=200_000,
+        bash_enabled=False,
+        summarizer=model,
+        summary_input_tokens=8000,
+        summary_prompt="ATOM-SUMMARY {messages}",
+    )
+    mw = runner._child_middleware()
+    assert any(isinstance(m, InstructionPinMiddleware) for m in mw)      # pin wired (#3)
+    comp = next(m for m in mw if isinstance(m, PinnedSummarizationMiddleware))
+    assert comp.trim_tokens_to_summarize == 8000                         # trim wired (#3)
+    assert "ATOM-SUMMARY" in comp.summary_prompt                         # atom prompt used (#2)
