@@ -93,6 +93,7 @@ def build_lead_agent(
     override_model: str | None = None,
     override_thinking: str | int | None = None,
     override_system_prompt: str | None = None,
+    trace: dict | None = None,
 ):
     """Construct the compiled lead agent for a profile."""
     from atom.tools.registry import FREQUENT_ELIGIBLE
@@ -142,6 +143,14 @@ def build_lead_agent(
         has_skill_library=library.has_skills,
         system_prompt_ref=override_system_prompt,
     )
+    if trace is not None:
+        from atom.observability import enrich_lead_trace
+
+        enrich_lead_trace(
+            trace, cfg=cfg, profile=profile, profile_name=profile_name,
+            system_prompt=system_prompt, context_window=prepared.context_window,
+            override_model=override_model, override_thinking=override_thinking,
+        )
     middleware = _build_middlewares(cfg, profile, prepared, provider, home, summarizer, library)
 
     return create_agent(

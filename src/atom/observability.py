@@ -17,7 +17,7 @@ import os
 import subprocess
 from typing import Any, Optional
 
-from atom.config.schema import AtomConfig, ObservabilityConfig
+from atom.config.schema import AgentProfile, AtomConfig, ObservabilityConfig
 
 
 def prompt_fingerprint(text: str) -> str:
@@ -88,3 +88,42 @@ def build_lead_trace(
         "task_id": task_id,
     }
     return {"run_name": f"{workflow}/{step_title}/{task_id}", "tags": tags, "metadata": metadata}
+
+
+def enrich_lead_trace(
+    trace: dict[str, Any], *, cfg: AtomConfig, profile: AgentProfile, profile_name: str,
+    system_prompt: str, context_window: int,
+    override_model: str | None = None, override_thinking: Any = None,
+) -> None:
+    """Runtime layer: model/thinking/window/limits/compaction + prompt fingerprints, in place."""
+    from atom.prompts.render import resolve_prompt_ref
+
+    obs = cfg.observability
+    model_key = override_model or profile.model
+    thinking = override_thinking if override_thinking is not None else profile.thinking
+
+    md = trace.setdefault("metadata", {})
+    md.update({
+        "profile_name": profile_name,
+        "model": model_key,
+        "thinking": thinking,
+        "context_window": context_window,
+        "recursion_limit": profile.recursion_limit,
+        "compaction_ratio": cfg.compaction.ratio,
+        "compaction_summary_input_tokens": cfg.compaction.summary_input_tokens,
+    })
+    tags = trace.setdefault("tags", [])
+    tags.append(f"profile:{profile_name}")
+    tags.append(f"model:{model_key}")
+
+    if obs.include_prompt_fingerprint:
+        md["system_prompt_ref"] = profile.system_prompt
+        md["system_prompt_sha"] = prompt_fingerprint(system_prompt)
+        if profile.summary_prompt:
+            summary_text = resolve_prompt_ref(profile.summary_prompt, cfg.config_dir)
+            md["summary_prompt_ref"] = profile.summary_prompt
+            md["summary_prompt_sha"] = prompt_fingerprint(summary_text)
+    if obs.capture_git_sha:
+        sha = git_sha()
+        if sha:
+            md["atom_git_sha"] = sha

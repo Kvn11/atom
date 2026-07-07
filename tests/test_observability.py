@@ -60,3 +60,45 @@ def test_build_lead_trace_shape():
     assert md["agent_role"] == "lead" and md["is_subagent"] is False
     assert md["workflow"] == "poems" and md["run_id"] == "r1" and md["task_id"] == "poet_a"
     assert md["step_index"] == 0 and md["step_title"] == "Draft"
+
+
+from atom.config.schema import AgentProfile
+from atom.observability import enrich_lead_trace
+
+
+def test_enrich_lead_trace_adds_runtime_and_fingerprint():
+    obs = ObservabilityConfig(include_prompt_fingerprint=True, capture_git_sha=False)
+    # summary_prompt=None keeps this a pure unit test (no prompt-file IO).
+    cfg = AtomConfig(
+        observability=obs,
+        agents={"default": AgentProfile(model="haiku", thinking="low", summary_prompt=None)},
+    )
+    trace = {"run_name": "x", "tags": ["role:lead"], "metadata": {"session_id": "t"}}
+    enrich_lead_trace(
+        trace, cfg=cfg, profile=cfg.profile("default"), profile_name="default",
+        system_prompt="SYSTEM PROMPT TEXT", context_window=200_000,
+    )
+    md = trace["metadata"]
+    assert md["session_id"] == "t"  # preserved
+    assert md["profile_name"] == "default" and md["model"] == "haiku" and md["thinking"] == "low"
+    assert md["context_window"] == 200_000 and md["recursion_limit"] == 400
+    assert md["compaction_ratio"] == 0.5 and md["compaction_summary_input_tokens"] == 8000
+    assert md["system_prompt_ref"] == "@prompts/lead_system.md"
+    assert len(md["system_prompt_sha"]) == 12
+    assert "summary_prompt_sha" not in md    # summary_prompt was None
+    assert "atom_git_sha" not in md          # capture_git_sha False
+    assert "profile:default" in trace["tags"] and "model:haiku" in trace["tags"]
+
+
+def test_enrich_lead_trace_respects_toggles_and_overrides():
+    obs = ObservabilityConfig(include_prompt_fingerprint=False, capture_git_sha=False)
+    cfg = AtomConfig(observability=obs)
+    trace = {"tags": [], "metadata": {}}
+    enrich_lead_trace(
+        trace, cfg=cfg, profile=cfg.profile("default"), profile_name="default",
+        system_prompt="X", context_window=1000,
+        override_model="opus", override_thinking="high",
+    )
+    md = trace["metadata"]
+    assert "system_prompt_sha" not in md and "system_prompt_ref" not in md
+    assert md["model"] == "opus" and md["thinking"] == "high"  # overrides win

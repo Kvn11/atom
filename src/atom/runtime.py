@@ -115,7 +115,8 @@ async def run_agent(
     async with open_checkpointer(cfg.checkpointer.backend, db_path) as cp:
         agent = build_lead_agent(
             cfg, profile_name, prepared=prepared, checkpointer=cp,
-            override_system_prompt=override_system_prompt,
+            override_model=override_model, override_thinking=override_thinking,
+            override_system_prompt=override_system_prompt, trace=trace,
         )
         run_config = build_run_config(thread_id, prof.recursion_limit, trace)
         result = await agent.ainvoke(
