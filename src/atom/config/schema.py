@@ -65,6 +65,15 @@ class GuardrailConfig(_Base):
     enabled: bool = False
 
 
+class ObservabilityConfig(_Base):
+    # LangSmith tracing for workflow runs. Layered over LANGSMITH_* env vars (env wins).
+    enabled: bool = False               # -> LANGSMITH_TRACING=true (only if API key present & env unset)
+    project: Optional[str] = None       # -> LANGSMITH_PROJECT (only if env unset)
+    default_tags: list[str] = Field(default_factory=list)  # tags added to every workflow run
+    include_prompt_fingerprint: bool = True  # add system/summary prompt ref + content hash to metadata
+    capture_git_sha: bool = True        # best-effort atom_git_sha in metadata
+
+
 class ToolsConfig(_Base):
     # Tools auto-bound/injected into the lead agent (everything else is library-deferred).
     frequent: list[str] = Field(
@@ -110,6 +119,7 @@ class AtomConfig(_Base):
     library: LibraryConfig = Field(default_factory=LibraryConfig)
     workflow: WorkflowConfig = Field(default_factory=WorkflowConfig)
     guardrails: GuardrailConfig = Field(default_factory=GuardrailConfig)
+    observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
     track_usage: bool = True
     agents: dict[str, AgentProfile] = Field(default_factory=lambda: {"default": AgentProfile()})
 
