@@ -13,8 +13,8 @@ from typing import Awaitable, Callable, Optional
 
 from atom.agent import PreparedModel
 from atom.config.schema import AtomConfig
+from atom.observability import apply_observability_env, build_lead_trace
 from atom.runtime import run_agent
-from atom.workflow.observability import build_trace
 from atom.workflow.run_store import (
     RunManifest, RunStore, StepState, TaskState, serialize_messages,
 )
@@ -59,6 +59,8 @@ class WorkflowEngine:
         # so tasks can bind their run's shared workspace. An empty list means "allow any" and is
         # left untouched. Built once here (never mutates self.cfg in place).
         self._task_cfg = self._build_task_cfg(cfg)
+        # Map observability config -> LANGSMITH_* env once, before any run (idempotent).
+        apply_observability_env(cfg)
 
     def _build_task_cfg(self, cfg: AtomConfig) -> AtomConfig:
         if not cfg.sandbox.allowed_workspace_roots:
@@ -188,9 +190,10 @@ class WorkflowEngine:
             ts.started_at = _now()
             self.store.save(manifest)
 
-            trace = build_trace(
+            trace = build_lead_trace(
                 workflow=workflow.name, run_id=manifest.run_id,
                 step_index=step_state.index, step_title=step_state.title, task_id=ts.id,
+                session_id=ts.thread_id, obs=self.cfg.observability,
             )
             t = self.cfg.workflow.task_timeout_seconds
             # 0 or negative explicitly disables the per-task timeout (documented sentinel;

@@ -22,6 +22,7 @@ from atom.checkpoint import open_checkpointer
 from atom.config import load_config
 from atom.config.schema import AtomConfig
 from atom.messages import message_text
+from atom.observability import _apply_trace
 from atom.prompts import render_prompt
 from atom.sandbox.paths import atom_home
 from atom.state import WorkspaceContext
@@ -56,15 +57,6 @@ def _build_context(cfg: AtomConfig, *, user_id, thread_id, profile_name, home, w
         "supports_vision": bool(caps.get("supports_vision")),
         "context_window": window,
     }
-
-
-def _apply_trace(run_config: dict, trace: dict | None) -> dict:
-    """Merge LangSmith run_name/tags/metadata into a LangGraph run config (in place)."""
-    if trace:
-        for key in ("run_name", "tags", "metadata"):
-            if trace.get(key) is not None:
-                run_config[key] = trace[key]
-    return run_config
 
 
 def build_run_config(thread_id: str, recursion_limit: int, trace: dict | None = None) -> dict:
