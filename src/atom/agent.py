@@ -151,7 +151,7 @@ def build_lead_agent(
             system_prompt=system_prompt, context_window=prepared.context_window,
             override_model=override_model, override_thinking=override_thinking,
         )
-    middleware = _build_middlewares(cfg, profile, prepared, provider, home, summarizer, library)
+    middleware = _build_middlewares(cfg, profile, prepared, provider, home, summarizer, library, trace)
 
     return create_agent(
         model=prepared.model,
@@ -179,6 +179,7 @@ def _build_middlewares(
     home: str,
     summarizer: BaseChatModel,
     library: LibraryIndex,
+    trace: dict | None = None,
 ) -> list[AgentMiddleware]:
     # Local imports keep the ordered list readable and avoid import cycles.
     from atom.middleware.clarification import ClarificationMiddleware
@@ -227,6 +228,8 @@ def _build_middlewares(
         summary_input_tokens=cfg.compaction.summary_input_tokens,
         summary_prompt=summary_prompt,
         recursion_limit=profile.subagents.recursion_limit,
+        base_trace=trace,
+        observability=cfg.observability,
     )
     deferred_names = library.deferred_tool_names()
 

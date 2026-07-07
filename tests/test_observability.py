@@ -102,3 +102,51 @@ def test_enrich_lead_trace_respects_toggles_and_overrides():
     md = trace["metadata"]
     assert "system_prompt_sha" not in md and "system_prompt_ref" not in md
     assert md["model"] == "opus" and md["thinking"] == "high"  # overrides win
+
+
+from atom.observability import build_subagent_trace
+
+
+def _lead_base():
+    return {
+        "run_name": "poems/Draft/poet_a",
+        "tags": ["atom-workflow", "workflow:poems", "role:lead", "model:haiku"],
+        "metadata": {
+            "session_id": "r1:s0:poet_a", "agent_role": "lead", "is_subagent": False,
+            "workflow": "poems", "run_id": "r1", "step_index": 0, "step_title": "Draft",
+            "task_id": "poet_a", "model": "haiku",
+            "system_prompt_ref": "@prompts/lead_system.md", "system_prompt_sha": "leadhash1234",
+            "summary_prompt_ref": "@prompts/summary.md", "summary_prompt_sha": "sumhash1234",
+        },
+    }
+
+
+def test_build_subagent_trace_overrides_role_and_prompt():
+    obs = ObservabilityConfig(include_prompt_fingerprint=True)
+    t = build_subagent_trace(
+        _lead_base(), parent_thread_id="r1:s0:poet_a", subagent_type="bash",
+        description="crunch the numbers", rendered_prompt="SUBAGENT SYSTEM",
+        subagent_prompt_ref="@prompts/subagent_bash.md", recursion_limit=300, obs=obs,
+    )
+    md = t["metadata"]
+    assert md["is_subagent"] is True and md["agent_role"] == "subagent"
+    assert md["session_id"] == "r1:s0:poet_a"       # same thread as the lead
+    assert md["parent_thread_id"] == "r1:s0:poet_a"
+    assert md["subagent_type"] == "bash"
+    assert md["subagent_description"] == "crunch the numbers"
+    assert md["recursion_limit"] == 300
+    assert md["workflow"] == "poems" and md["run_id"] == "r1"   # inherited from base
+    assert md["system_prompt_ref"] == "@prompts/subagent_bash.md"
+    assert md["system_prompt_sha"] == prompt_fingerprint("SUBAGENT SYSTEM")
+    assert "summary_prompt_ref" not in md and "summary_prompt_sha" not in md  # lead-only, dropped
+    assert "role:lead" not in t["tags"] and "role:subagent" in t["tags"]
+    assert "subagent_type:bash" in t["tags"]
+    assert t["run_name"] == "poems/Draft/poet_a/sub:crunch the numbers"
+
+
+def test_build_subagent_trace_none_base_returns_none():
+    assert build_subagent_trace(
+        None, parent_thread_id="x", subagent_type="bash", description="d",
+        rendered_prompt="p", subagent_prompt_ref="r", recursion_limit=300,
+        obs=ObservabilityConfig(),
+    ) is None

@@ -13,7 +13,7 @@ import datetime
 import threading
 import uuid
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 from langchain.agents import create_agent
 from langchain_core.language_models import BaseChatModel
@@ -59,6 +59,8 @@ class SubagentRunner:
     max_concurrent: int = 3
     timeout_seconds: int = 900
     recursion_limit: int = 300  # max LangGraph super-steps per child run (~N/11 agent turns)
+    base_trace: dict | None = None       # enriched lead trace; None -> sub-agent runs untraced
+    observability: Any = None            # ObservabilityConfig | None
 
     def __post_init__(self) -> None:
         self._sem = asyncio.Semaphore(clamp_concurrency(self.max_concurrent))
@@ -101,9 +103,9 @@ class SubagentRunner:
         mw += [ToolErrorHandlingMiddleware(), LoopDetectionMiddleware()]
         return mw
 
-    def _child_agent(self, subagent_type: SubagentType):
+    def _child_system(self, subagent_type: SubagentType) -> str:
         frequent = [t.name for t in self._child_tools(subagent_type)]
-        system = render_prompt(
+        return render_prompt(
             _SUBAGENT_PROMPTS[subagent_type],
             {
                 "date": datetime.date.today().isoformat(),
@@ -114,6 +116,9 @@ class SubagentRunner:
             },
             self.config_dir,
         )
+
+    def _child_agent(self, subagent_type: SubagentType, system: str | None = None):
+        system = system or self._child_system(subagent_type)
         return create_agent(
             model=self.model,
             tools=self._child_tools(subagent_type),
@@ -128,8 +133,20 @@ class SubagentRunner:
     ) -> tuple[str, dict[str, int]]:
         """Run a child agent; return ``(report_text, usage_delta)``."""
         async with self._sem:
-            agent = self._child_agent(subagent_type)
+            system_text = self._child_system(subagent_type)
+            agent = self._child_agent(subagent_type, system=system_text)
             child_id = f"{parent_thread_id}:sub:{uuid.uuid4().hex[:8]}"
+            config = self._child_config(child_id)
+            if self.base_trace is not None and self.observability is not None:
+                from atom.observability import _apply_trace, build_subagent_trace
+
+                _apply_trace(config, build_subagent_trace(
+                    self.base_trace, parent_thread_id=parent_thread_id,
+                    subagent_type=subagent_type, description=description,
+                    rendered_prompt=system_text,
+                    subagent_prompt_ref=_SUBAGENT_PROMPTS[subagent_type],
+                    recursion_limit=self.recursion_limit, obs=self.observability,
+                ))
             # Share the parent workspace: context thread_id == parent so tools find the same sandbox.
             context: WorkspaceContext = {
                 "thread_id": parent_thread_id,
@@ -143,7 +160,7 @@ class SubagentRunner:
                 result = await asyncio.wait_for(
                     agent.ainvoke(
                         {"messages": [HumanMessage(content=prompt)]},
-                        config=self._child_config(child_id),
+                        config=config,
                         context=context,
                     ),
                     timeout=self.timeout_seconds,

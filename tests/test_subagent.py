@@ -130,3 +130,66 @@ def test_child_middleware_pins_and_uses_atom_summary_prompt():
     comp = next(m for m in mw if isinstance(m, PinnedSummarizationMiddleware))
     assert comp.trim_tokens_to_summarize == 8000                         # trim wired (#3)
     assert "ATOM-SUMMARY" in comp.summary_prompt                         # atom prompt used (#2)
+
+
+@pytest.mark.asyncio
+async def test_subagent_child_config_carries_trace(base_config):
+    from atom.config.schema import ObservabilityConfig
+    from atom.subagent import SubagentRunner
+    from tests.conftest import ScriptedChatModel
+
+    model = ScriptedChatModel(responses=[AIMessage(content="CHILD_DONE")],
+                              profile={"max_input_tokens": 100_000})
+    base_trace = {
+        "run_name": "wf/Draft/t", "tags": ["role:lead", "workflow:wf"],
+        "metadata": {"session_id": "p1", "workflow": "wf", "run_id": "r1",
+                     "step_title": "Draft", "task_id": "t", "agent_role": "lead",
+                     "is_subagent": False},
+    }
+    runner = SubagentRunner(
+        model=model, home=str(base_config.home), context_window=100_000,
+        bash_enabled=False, base_trace=base_trace, observability=ObservabilityConfig(),
+    )
+
+    captured = {}
+
+    class _StubAgent:
+        async def ainvoke(self, inp, config=None, context=None):
+            captured["config"] = config
+            return {"messages": [AIMessage(content="CHILD_DONE")]}
+
+    runner._child_agent = lambda st, system=None: _StubAgent()
+
+    text, _usage = await runner.run("p1", "do the thing", "go", "general-purpose")
+    assert text == "CHILD_DONE"
+    cfg = captured["config"]
+    assert cfg["configurable"]["thread_id"].startswith("p1:sub:")  # child keeps its own state id
+    md = cfg["metadata"]
+    assert md["is_subagent"] is True and md["agent_role"] == "subagent"
+    assert md["session_id"] == "p1"                 # grouped into the lead's thread
+    assert md["parent_thread_id"] == "p1"
+    assert md["subagent_type"] == "general-purpose"
+    assert "role:subagent" in cfg["tags"] and "subagent_type:general-purpose" in cfg["tags"]
+
+
+@pytest.mark.asyncio
+async def test_subagent_no_base_trace_is_untraced(base_config):
+    from atom.subagent import SubagentRunner
+    from tests.conftest import ScriptedChatModel
+
+    model = ScriptedChatModel(responses=[AIMessage(content="OK")],
+                              profile={"max_input_tokens": 100_000})
+    runner = SubagentRunner(model=model, home=str(base_config.home),
+                            context_window=100_000, bash_enabled=False)  # no base_trace
+
+    captured = {}
+
+    class _StubAgent:
+        async def ainvoke(self, inp, config=None, context=None):
+            captured["config"] = config
+            return {"messages": [AIMessage(content="OK")]}
+
+    runner._child_agent = lambda st, system=None: _StubAgent()
+    await runner.run("p1", "d", "go", "general-purpose")
+    cfg = captured["config"]
+    assert "metadata" not in cfg and "tags" not in cfg  # CLI-style: nothing attached

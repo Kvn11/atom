@@ -127,3 +127,44 @@ def enrich_lead_trace(
         sha = git_sha()
         if sha:
             md["atom_git_sha"] = sha
+
+
+def build_subagent_trace(
+    base_trace: dict[str, Any] | None, *, parent_thread_id: str, subagent_type: str,
+    description: str, rendered_prompt: str, subagent_prompt_ref: str,
+    recursion_limit: int, obs: ObservabilityConfig,
+) -> dict[str, Any] | None:
+    """Sub-agent layer: inherit the lead's workflow/run/model fields, override role + thread + prompt.
+
+    Returns None when there is no base trace (e.g. the CLI path), so callers can skip tracing.
+    """
+    if base_trace is None:
+        return None
+    base_md = base_trace.get("metadata", {})
+    md = dict(base_md)  # inherit workflow/run/step/model/context_window/git_sha
+    md.update({
+        "session_id": parent_thread_id,   # keep the sub-agent in the lead's thread
+        "agent_role": "subagent",
+        "is_subagent": True,
+        "subagent_type": subagent_type,
+        "subagent_description": description,
+        "parent_thread_id": parent_thread_id,
+        "recursion_limit": recursion_limit,
+    })
+    md.pop("summary_prompt_ref", None)     # summary prompt is a lead-only concept
+    md.pop("summary_prompt_sha", None)
+    if obs.include_prompt_fingerprint:
+        md["system_prompt_ref"] = subagent_prompt_ref
+        md["system_prompt_sha"] = prompt_fingerprint(rendered_prompt)
+    else:
+        md.pop("system_prompt_ref", None)
+        md.pop("system_prompt_sha", None)
+
+    tags = [t for t in base_trace.get("tags", []) if t != "role:lead"]
+    tags += ["role:subagent", f"subagent_type:{subagent_type}"]
+
+    wf = base_md.get("workflow", "")
+    step = base_md.get("step_title", "")
+    task = base_md.get("task_id", "")
+    run_name = f"{wf}/{step}/{task}/sub:{description[:40]}"
+    return {"run_name": run_name, "tags": tags, "metadata": md}
