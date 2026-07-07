@@ -67,6 +67,27 @@ steps wrote to the shared workspace. Set `LANGSMITH_TRACING=true` + `LANGSMITH_A
 each task (tagged by workflow/step/task). The API (`atom serve`) is automation-first: `POST
 /api/runs` to submit a job, poll `GET /api/runs/{id}`, then `GET /api/runs/{id}/artifacts`.
 
+## Observability (LangSmith)
+
+Workflow runs can be traced to [LangSmith](https://smith.langchain.com). Enable it via the
+`observability:` block in `config.yaml` or the standard `LANGSMITH_*` env vars (env wins):
+
+```yaml
+observability:
+  enabled: true
+  project: atom-workflows
+```
+
+Set `LANGSMITH_API_KEY` in `.env`. Tracing turns on only when a key is present.
+
+Each workflow task is its own LangSmith **thread** (keyed by `session_id` = the task thread id).
+Sub-agents are tagged `role:subagent` / `is_subagent` and grouped into their parent lead agent's
+thread. Every run carries eval-ready metadata: `workflow` / `run_id` / `step_*` / `task_id`, the
+`model` / `thinking` / `context_window` / `recursion_limit`, compaction settings, and a **prompt
+fingerprint** (`system_prompt_ref` + `system_prompt_sha`, plus `summary_prompt_*` for the lead) so a
+prompt version can be correlated with run outcomes. Filter in the UI by tags such as
+`workflow:<name>`, `profile:<name>`, `model:<name>`, `role:lead` / `role:subagent`.
+
 ## Configure (`config.yaml`)
 
 The whole harness is config-driven. An **agent profile** defines one project's lead agent:

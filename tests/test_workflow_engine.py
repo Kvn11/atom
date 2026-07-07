@@ -330,3 +330,32 @@ async def test_draft_artifact_snapshot_survives_refine_overwrite(base_config, at
     assert (ad / "s0__poet_a" / "poem_a.md").read_text() == "draft\n"      # snapshot preserved
     assert (ad / "s1__refiner" / "poem_a.md").read_text() == "refined\n"
     assert (engine.store.workspace_dir("runsnap") / "poem_a.md").read_text() == "refined\n"
+
+
+@pytest.mark.asyncio
+async def test_task_trace_carries_session_id(base_config, atom_home, monkeypatch):
+    """Each task's trace must carry its own thread id as session_id (one thread per lead agent)."""
+    real = engine_mod.run_agent
+    traces = []
+
+    async def spy(prompt, **kwargs):
+        traces.append(kwargs.get("trace"))
+        return await real(prompt, **kwargs)
+
+    monkeypatch.setattr(engine_mod, "run_agent", spy)
+
+    scripts = {
+        "poet_a": [AIMessage(content="a done")],
+        "poet_b": [AIMessage(content="b done")],
+    }
+    engine = WorkflowEngine(
+        base_config,
+        prepared_provider=lambda td, sd, wf: make_prepared(list(scripts[td.id])),
+    )
+    engine.create_run(_draft_only(), {"topic": "sea"}, "runx", "2026-07-03T00:00:00")
+    await engine.execute("runx")
+
+    sids = {t["metadata"]["session_id"] for t in traces}
+    assert sids == {"runx:s0:poet_a", "runx:s0:poet_b"}  # distinct thread per task
+    assert all(t["metadata"]["agent_role"] == "lead" for t in traces)
+    assert all("role:lead" in t["tags"] for t in traces)
