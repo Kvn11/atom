@@ -143,15 +143,18 @@ def build_lead_agent(
         has_skill_library=library.has_skills,
         system_prompt_ref=override_system_prompt,
     )
-    if trace is not None:
-        from atom.observability import enrich_lead_trace
+    from atom.observability import enrich_lead_trace, tracing_active
 
+    mw_trace = None
+    if trace is not None and tracing_active():
         enrich_lead_trace(
             trace, cfg=cfg, profile=profile, profile_name=profile_name,
             system_prompt=system_prompt, context_window=prepared.context_window,
             override_model=override_model, override_thinking=override_thinking,
+            override_system_prompt=override_system_prompt,
         )
-    middleware = _build_middlewares(cfg, profile, prepared, provider, home, summarizer, library, trace)
+        mw_trace = trace
+    middleware = _build_middlewares(cfg, profile, prepared, provider, home, summarizer, library, mw_trace)
 
     return create_agent(
         model=prepared.model,

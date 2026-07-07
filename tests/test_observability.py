@@ -3,11 +3,14 @@ from __future__ import annotations
 
 import os
 
-from atom.config.schema import AtomConfig, ObservabilityConfig
+from atom.config.schema import AgentProfile, AtomConfig, ObservabilityConfig
 from atom.observability import (
     apply_observability_env,
     build_lead_trace,
+    build_subagent_trace,
+    enrich_lead_trace,
     prompt_fingerprint,
+    tracing_active,
 )
 
 
@@ -16,6 +19,17 @@ def test_prompt_fingerprint_deterministic():
     assert a == prompt_fingerprint("hello world")
     assert len(a) == 12
     assert prompt_fingerprint("other") != a
+
+
+def test_tracing_active(monkeypatch):
+    monkeypatch.delenv("LANGSMITH_TRACING", raising=False)
+    assert tracing_active() is False
+    for value in ("true", "1", "TRUE"):
+        monkeypatch.setenv("LANGSMITH_TRACING", value)
+        assert tracing_active() is True
+    for value in ("false", "0", ""):
+        monkeypatch.setenv("LANGSMITH_TRACING", value)
+        assert tracing_active() is False
 
 
 def test_apply_env_fills_unset(monkeypatch):
@@ -41,9 +55,11 @@ def test_apply_env_respects_existing(monkeypatch):
 def test_apply_env_no_key_no_enable(monkeypatch):
     monkeypatch.delenv("LANGSMITH_TRACING", raising=False)
     monkeypatch.delenv("LANGSMITH_API_KEY", raising=False)
+    monkeypatch.delenv("LANGSMITH_PROJECT", raising=False)
     cfg = AtomConfig(observability=ObservabilityConfig(enabled=True))
     apply_observability_env(cfg)
     assert "LANGSMITH_TRACING" not in os.environ  # no key -> safe no-op
+    assert "LANGSMITH_PROJECT" not in os.environ  # tracing won't enable -> project must not be set
 
 
 def test_build_lead_trace_shape():
@@ -60,10 +76,6 @@ def test_build_lead_trace_shape():
     assert md["agent_role"] == "lead" and md["is_subagent"] is False
     assert md["workflow"] == "poems" and md["run_id"] == "r1" and md["task_id"] == "poet_a"
     assert md["step_index"] == 0 and md["step_title"] == "Draft"
-
-
-from atom.config.schema import AgentProfile
-from atom.observability import enrich_lead_trace
 
 
 def test_enrich_lead_trace_adds_runtime_and_fingerprint():
@@ -102,9 +114,6 @@ def test_enrich_lead_trace_respects_toggles_and_overrides():
     md = trace["metadata"]
     assert "system_prompt_sha" not in md and "system_prompt_ref" not in md
     assert md["model"] == "opus" and md["thinking"] == "high"  # overrides win
-
-
-from atom.observability import build_subagent_trace
 
 
 def _lead_base():

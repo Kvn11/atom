@@ -15,7 +15,7 @@ from __future__ import annotations
 import hashlib
 import os
 import subprocess
-from typing import Any, Optional
+from typing import Any
 
 from atom.config.schema import AgentProfile, AtomConfig, ObservabilityConfig
 
@@ -25,7 +25,12 @@ def prompt_fingerprint(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
 
 
-def git_sha() -> Optional[str]:
+def tracing_active() -> bool:
+    """True when LangSmith tracing is actually on (env), so enrichment work is worth doing."""
+    return os.environ.get("LANGSMITH_TRACING", "").strip().lower() in ("1", "true")
+
+
+def git_sha() -> str | None:
     """Best-effort short commit sha; None outside a repo or on any error (never raises)."""
     try:
         out = subprocess.run(
@@ -44,13 +49,11 @@ def apply_observability_env(cfg: AtomConfig) -> None:
     safe no-op rather than a crash or a keyless export attempt. Idempotent.
     """
     obs = cfg.observability
-    if obs.project and not os.environ.get("LANGSMITH_PROJECT"):
+    tracing_on = tracing_active()
+    will_enable = bool(obs.enabled and os.environ.get("LANGSMITH_API_KEY") and not os.environ.get("LANGSMITH_TRACING"))
+    if (tracing_on or will_enable) and obs.project and not os.environ.get("LANGSMITH_PROJECT"):
         os.environ["LANGSMITH_PROJECT"] = obs.project
-    if (
-        obs.enabled
-        and not os.environ.get("LANGSMITH_TRACING")
-        and os.environ.get("LANGSMITH_API_KEY")
-    ):
+    if will_enable:
         os.environ["LANGSMITH_TRACING"] = "true"
 
 
@@ -94,6 +97,7 @@ def enrich_lead_trace(
     trace: dict[str, Any], *, cfg: AtomConfig, profile: AgentProfile, profile_name: str,
     system_prompt: str, context_window: int,
     override_model: str | None = None, override_thinking: Any = None,
+    override_system_prompt: str | None = None,
 ) -> None:
     """Runtime layer: model/thinking/window/limits/compaction + prompt fingerprints, in place."""
     from atom.prompts.render import resolve_prompt_ref
@@ -117,7 +121,7 @@ def enrich_lead_trace(
     tags.append(f"model:{model_key}")
 
     if obs.include_prompt_fingerprint:
-        md["system_prompt_ref"] = profile.system_prompt
+        md["system_prompt_ref"] = override_system_prompt or profile.system_prompt
         md["system_prompt_sha"] = prompt_fingerprint(system_prompt)
         if profile.summary_prompt:
             summary_text = resolve_prompt_ref(profile.summary_prompt, cfg.config_dir)

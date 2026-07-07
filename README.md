@@ -63,9 +63,9 @@ A workflow is defined in YAML (`$ATOM_HOME/workflows/<name>.yaml`): workflow-lev
 (required/optional, used in task prompts via `{{ topic }}`), ordered `steps`, and each step's
 `tasks` (a `prompt` plus optional `model`/`thinking`). Tasks in a step run in parallel; a step
 advances only if **all** its tasks succeed, otherwise the run halts. Later steps read what earlier
-steps wrote to the shared workspace. Set `LANGSMITH_TRACING=true` + `LANGSMITH_API_KEY` to trace
-each task (tagged by workflow/step/task). The API (`atom serve`) is automation-first: `POST
-/api/runs` to submit a job, poll `GET /api/runs/{id}`, then `GET /api/runs/{id}/artifacts`.
+steps wrote to the shared workspace. Each task can be traced to LangSmith — see Observability below.
+The API (`atom serve`) is automation-first: `POST /api/runs` to submit a job, poll
+`GET /api/runs/{id}`, then `GET /api/runs/{id}/artifacts`.
 
 ## Observability (LangSmith)
 
