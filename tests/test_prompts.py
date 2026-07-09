@@ -113,6 +113,7 @@ def test_subagent_prompts_render_and_report_contract():
         "uploads": "/u",
         "outputs": "/o",
         "frequent_tool_names": ["read_file", "write_file"],
+        "skill_catalog": [],
     }
     for ref in ("@prompts/subagent_general.md", "@prompts/subagent_bash.md"):
         out = render_prompt(ref, ctx)

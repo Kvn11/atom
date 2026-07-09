@@ -76,6 +76,38 @@ def test_subagent_limit_strips_orphaned_tool_use_blocks():
     assert len(tool_use_ids) == 2
 
 
+def test_child_agent_has_skill_tools_and_catalog(atom_home):
+    from atom.subagent import SubagentRunner
+
+    runner = SubagentRunner(
+        model=None, home=str(atom_home), context_window=100_000, bash_enabled=True,
+        skill_catalog=[{"name": "logseq-cli", "description": "Operate Logseq"}],
+        has_skill_library=True,
+    )
+    for st in ("general-purpose", "bash"):
+        names = [t.name for t in runner._child_tools(st)]
+        assert "load_skill" in names and "search_skills" in names
+    sys = runner._child_system("general-purpose")
+    assert "logseq-cli" in sys and "Operate Logseq" in sys
+
+
+def test_child_middleware_includes_skill_library_when_catalog(atom_home):
+    from atom.middleware.skill_library import SkillLibraryMiddleware
+    from atom.subagent import SubagentRunner
+
+    runner = SubagentRunner(model=None, home=str(atom_home), context_window=100_000,
+                            bash_enabled=False, skill_catalog=[{"name": "x", "description": "y"}])
+    assert any(isinstance(m, SkillLibraryMiddleware) for m in runner._child_middleware())
+
+
+def test_child_agent_no_skill_tools_when_none(atom_home):
+    from atom.subagent import SubagentRunner
+
+    runner = SubagentRunner(model=None, home=str(atom_home), context_window=100_000, bash_enabled=False)
+    names = [t.name for t in runner._child_tools("general-purpose")]
+    assert "load_skill" not in names and "search_skills" not in names
+
+
 def test_child_agent_cannot_delegate(base_config):
     from atom.subagent import SubagentRunner
 

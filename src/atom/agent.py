@@ -247,6 +247,8 @@ def _build_middlewares(
         recursion_limit=profile.subagents.recursion_limit,
         base_trace=trace,
         observability=cfg.observability,
+        skill_catalog=skill_catalog or [],
+        has_skill_library=library.has_skills,
     )
     deferred_names = library.deferred_tool_names()
 

@@ -12,7 +12,7 @@ import asyncio
 import datetime
 import threading
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from langchain.agents import create_agent
@@ -61,6 +61,8 @@ class SubagentRunner:
     recursion_limit: int = 300  # max LangGraph super-steps per child run (~N/11 agent turns)
     base_trace: dict | None = None       # enriched lead trace; None -> sub-agent runs untraced
     observability: Any = None            # ObservabilityConfig | None
+    skill_catalog: list = field(default_factory=list)  # [{"name","description"}] always-on catalog
+    has_skill_library: bool = False      # a skill_library/ exists -> bind search_skills
 
     def __post_init__(self) -> None:
         self._sem = asyncio.Semaphore(clamp_concurrency(self.max_concurrent))
@@ -72,10 +74,15 @@ class SubagentRunner:
         # Note: children get file tools (+bash) but NOT delegate_task — no nested delegation.
         from atom.tools.bash import bash
         from atom.tools.filesystem import FILESYSTEM_TOOLS
+        from atom.tools.search import load_skill, search_skills
 
         tools = list(FILESYSTEM_TOOLS)
         if subagent_type == "bash" and self.bash_enabled:
             tools.append(bash)
+        if self.skill_catalog or self.has_skill_library:
+            tools.append(load_skill)
+        if self.has_skill_library:
+            tools.append(search_skills)
         return tools
 
     def _child_middleware(self) -> list:
@@ -100,6 +107,10 @@ class SubagentRunner:
                     summary_prompt=self.summary_prompt,
                 )
             )
+        if self.skill_catalog or self.has_skill_library:
+            from atom.middleware.skill_library import SkillLibraryMiddleware
+
+            mw.append(SkillLibraryMiddleware(self.home))
         mw += [ToolErrorHandlingMiddleware(), LoopDetectionMiddleware()]
         return mw
 
@@ -113,6 +124,7 @@ class SubagentRunner:
                 "uploads": VIRTUAL_UPLOADS,
                 "outputs": VIRTUAL_OUTPUTS,
                 "frequent_tool_names": frequent,
+                "skill_catalog": list(self.skill_catalog),
             },
             self.config_dir,
         )
