@@ -12,12 +12,14 @@ import datetime
 import logging
 from typing import Awaitable, Callable, Optional
 
+from langchain_core.tracers.langchain import wait_for_all_tracers
+
 logger = logging.getLogger(__name__)
 
 from atom.agent import PreparedModel
 from atom.config.schema import AtomConfig
 from atom.notes import ensure_vault
-from atom.observability import apply_observability_env, build_lead_trace
+from atom.observability import apply_observability_env, build_lead_trace, tracing_active
 from atom.runtime import run_agent
 from atom.workflow.run_store import (
     RunManifest, RunStore, StepState, TaskState, serialize_messages,
@@ -200,6 +202,10 @@ class WorkflowEngine:
             raise
         finally:
             self._defs.pop(run_id, None)
+            # Flush LangSmith's background trace queue before the process can exit, so the run's
+            # final batch is guaranteed uploaded and downloadable. No-op when tracing is off.
+            if tracing_active():
+                wait_for_all_tracers()
 
     async def _run_task(
         self, manifest: RunManifest, workflow: WorkflowDef,

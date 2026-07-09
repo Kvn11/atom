@@ -432,3 +432,39 @@ async def test_task_trace_carries_session_id(base_config, atom_home, monkeypatch
     assert all(t["metadata"]["agent_role"] == "lead" for t in traces)
     # Leads carry no role tag (role lives in metadata) so it can't leak onto nested sub-agent runs.
     assert all("role:lead" not in t["tags"] for t in traces)
+
+
+def _one_task_wf():
+    return WorkflowDef.model_validate({
+        "name": "demo",
+        "inputs": [{"name": "topic", "required": True}],
+        "steps": [{"title": "Draft", "tasks": [{"id": "solo", "prompt": "write {{ topic }}"}]}],
+    })
+
+
+@pytest.mark.asyncio
+async def test_execute_flushes_tracers_when_active(base_config, monkeypatch):
+    calls = []
+    monkeypatch.setattr(engine_mod, "tracing_active", lambda: True)
+    monkeypatch.setattr(engine_mod, "wait_for_all_tracers", lambda: calls.append("flush"))
+    engine = WorkflowEngine(
+        base_config,
+        prepared_provider=lambda td, sd, wf: make_prepared([AIMessage(content="done")]),
+    )
+    engine.create_run(_one_task_wf(), {"topic": "sea"}, "runF", "2026-07-09T00:00:00")
+    await engine.execute("runF")
+    assert calls == ["flush"]  # flushed exactly once
+
+
+@pytest.mark.asyncio
+async def test_execute_skips_flush_when_inactive(base_config, monkeypatch):
+    calls = []
+    monkeypatch.setattr(engine_mod, "tracing_active", lambda: False)
+    monkeypatch.setattr(engine_mod, "wait_for_all_tracers", lambda: calls.append("flush"))
+    engine = WorkflowEngine(
+        base_config,
+        prepared_provider=lambda td, sd, wf: make_prepared([AIMessage(content="done")]),
+    )
+    engine.create_run(_one_task_wf(), {"topic": "sea"}, "runG", "2026-07-09T00:00:00")
+    await engine.execute("runG")
+    assert calls == []  # tracing off -> no flush
