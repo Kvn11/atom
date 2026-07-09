@@ -46,7 +46,7 @@ Two coupled changes:
 4. Auto-discover `$ATOM_HOME/skills/` and inject a name+description **catalog** into **every**
    lead and sub-agent system prompt.
 5. `search_skills` returns lightweight frontmatter only (discovery); `load_skill(name)` is the
-   only loader; both leads and sub-agents can `load_skill`.
+   only loader. Leads and sub-agents get full parity: catalog + `search_skills` + `load_skill`.
 6. A test workflow that exercises and debugs notes end-to-end, provably persisting across runs.
 7. Document the `logseq` CLI prerequisite in the README.
 
@@ -56,9 +56,6 @@ Two coupled changes:
   observability precedent). The skill catalog/load change *is* general and reaches `atom run`.
 - A new virtual filesystem mount for the vault (not needed — bash is unconfined; see below).
 - Concurrency control around vault writes (Logseq handles concurrency).
-- `search_skills` for sub-agents. Sub-agents get the always-on catalog + `load_skill` (they can
-  load anything by name); fuzzy `skill_library/` discovery stays lead-only to keep the
-  sub-agent surface small. (Easy to extend later.)
 - Sync / e2ee / remote graphs.
 
 ## Background: relevant current architecture
@@ -144,14 +141,19 @@ full instructions with `load_skill("<name>")`.
 {% endfor %}{% endif %}
 ```
 
-**Sub-agent wiring** (`src/atom/subagent.py`):
-- Pass the same `skill_catalog` into `SubagentRunner` (a `skill_catalog: list = []` field).
+**Sub-agent wiring** (`src/atom/subagent.py`) — full parity with the lead:
+- Pass `skill_catalog: list = []` and `has_skill_library: bool = False` into `SubagentRunner`
+  (from `build_lead_agent` via `_build_middlewares`, which has `library`).
 - `_child_system` adds `skill_catalog=[{name,description}…]` to the render ctx (always present).
 - Add the same catalog block to `subagent_general.md` and `subagent_bash.md` (with a
   `load_skill` hint). Because rendering uses `StrictUndefined`, ctx must always pass it.
-- `_child_tools`: append `load_skill` (both sub-agent types). **Not** `search_skills`.
-- `_child_middleware`: append `SkillLibraryMiddleware(home)` so a child's `load_skill` body
-  injects. (Children already use `ThreadState`, so `promoted_skills` exists.)
+- `_child_tools`: append `load_skill` when `skill_catalog or has_skill_library`; append
+  `search_skills` when `has_skill_library`. (`search_skills` resolves the same per-home index
+  the lead registered via `register_index`, so no extra wiring — `get_index(home)` works from
+  the child, whose context carries the parent `home`.)
+- `_child_middleware`: append `SkillLibraryMiddleware(home)` when `skill_catalog or
+  has_skill_library`, so a child's `load_skill`/`search_skills`→`load_skill` body injects.
+  (Children already use `ThreadState`, so `promoted_skills` exists.)
 
 **Config:** `skills.frequent` is retained but re-interpreted as "extra skills to advertise in
 the always-on catalog" (name+description, load on demand) — no longer full-body injection.
@@ -273,8 +275,9 @@ steps:
   error, no mutation. (New `test_search`/tool test.)
 - **Body injection unchanged:** a name in `promoted_skills` still injects via
   `SkillLibraryMiddleware` from `skills/`. (`test_middleware`/existing.)
-- **Sub-agent:** `_child_system` includes the catalog; `_child_tools` includes `load_skill`;
-  `_child_middleware` includes `SkillLibraryMiddleware`. (`test_subagent.py`.)
+- **Sub-agent:** `_child_system` includes the catalog; `_child_tools` includes `load_skill`
+  (and `search_skills` when a `skill_library/` exists); `_child_middleware` includes
+  `SkillLibraryMiddleware`; a child `load_skill` promotion injects the body. (`test_subagent.py`.)
 - **Notes schema:** `notes` defaults `enabled=False`; a `notes:` block parses; `provider`
   defaults `logseq`; `graph` optional. (`test_workflow_schema.py`.)
 - **Notes snippet:** `render_lead_system_prompt(..., notes={...})` includes graph + root-dir;
@@ -311,7 +314,8 @@ steps:
 - **Changed:** `src/atom/library.py` (`load_skill_catalog`), `src/atom/tools/search.py`
   (`search_skills` discovery-only + new `load_skill`), `src/atom/agent.py` (catalog + tool +
   middleware gating + `notes` param + ctx), `src/atom/runtime.py` (`notes` param),
-  `src/atom/subagent.py` (`skill_catalog` field, ctx, `load_skill` tool, `SkillLibraryMiddleware`),
+  `src/atom/subagent.py` (`skill_catalog`/`has_skill_library` fields, ctx, `load_skill` +
+  `search_skills` tools, `SkillLibraryMiddleware`),
   `src/atom/workflow/schema.py` (`NotesConfig`), `src/atom/workflow/engine.py` (ensure +
   forward), `prompts/lead_system.md` (catalog + notes block),
   `prompts/subagent_general.md` + `prompts/subagent_bash.md` (catalog block), `README.md`,
