@@ -20,6 +20,9 @@ cp .env.example .env               # add the API key(s) you have
 Set the key for whatever model you run — e.g. `ANTHROPIC_API_KEY` for the default Claude Haiku.
 (Providers: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY`, `DASHSCOPE_API_KEY`.)
 
+**Prerequisites for persistent-notes workflows:** the `logseq` CLI must be installed and on your
+`PATH` (guaranteed on target devices). Verify with `logseq --version`.
+
 ## Use
 
 ```bash
@@ -39,9 +42,10 @@ Everything persists per thread under `$ATOM_HOME` (default `~/.atom`); resume a 
 - **Multi-provider models** — Anthropic, OpenAI, Gemini, Alibaba Qwen. Context window +
   capabilities come from the live model profile (with a static fallback registry).
 - **Planning (TODOs)** and **subagent delegation (`delegate_task`)** are **always on**.
-- **Two-tier tool/skill libraries** — frequent tools/skills are bound/injected up front; the rest
-  live in `$ATOM_HOME/tool_library` and `skill_library` and are found via `search_tools` /
-  `search_skills` (BM25) and promoted on demand.
+- **Two-tier tool/skill libraries** — frequent tools are bound up front and skills in
+  `$ATOM_HOME/skills/` are auto-advertised as a name+description catalog; the rest live in
+  `$ATOM_HOME/tool_library` and `skill_library` and are found via `search_tools` / `search_skills`
+  (BM25). Tools are promoted on demand; skill bodies are pulled in with `load_skill`.
 - **Compaction** at 50% of the selected model's context window.
 - **Workspace** provisioned new or bound to an existing directory (a per-run choice).
 - **Clarification** interrupts the turn and resumes on the next message.
@@ -66,6 +70,20 @@ advances only if **all** its tasks succeed, otherwise the run halts. Later steps
 steps wrote to the shared workspace. Each task can be traced to LangSmith — see Observability below.
 The API (`atom serve`) is automation-first: `POST /api/runs` to submit a job, poll
 `GET /api/runs/{id}`, then `GET /api/runs/{id}/artifacts`.
+
+**Persistent notes.** Add a `notes:` block to a workflow to give it long-term memory that
+persists across runs:
+
+```yaml
+notes:
+  enabled: true          # provisions a per-workflow Logseq vault, shared by every run
+  # graph: my-graph      # optional; defaults to the slugified workflow name
+```
+
+When enabled, atom ensures a Logseq graph at `$ATOM_HOME/notes/<workflow-slug>/` (once, reused
+across runs) and injects a snippet into each task's system prompt telling the agent where the vault
+is and to `load_skill("logseq-cli")` for the CLI commands. Try it with `workflows/notes-smoke.yaml`
+(run it twice — the second run recalls the first run's entry).
 
 ## Observability (LangSmith)
 
@@ -111,9 +129,10 @@ the per-run `--workspace` argument.
   (`name`, `description`, `keywords`, `tier: deferred`, `entrypoint: <fn>`) and a `tool.py`
   defining a `@tool`. It becomes discoverable via `search_tools`.
 - **A skill**: create `$ATOM_HOME/skill_library/<name>/SKILL.md` with YAML front-matter
-  (`name`, `description`, `keywords`) + a markdown body. Discoverable via `search_skills`.
-  Put always-on skills in `$ATOM_HOME/skills/<name>/SKILL.md` and list them in a profile's
-  `skills.frequent`.
+  (`name`, `description`, `keywords`) + a markdown body. Discover it with `search_skills` and load
+  it with `load_skill("<name>")`. Skills in `$ATOM_HOME/skills/<name>/SKILL.md` are auto-discovered
+  into an always-on catalog (name + description) in every agent's prompt (lead + sub-agents) and
+  loaded on demand with `load_skill`.
 - **A middleware**: subclass `AgentMiddleware`, implement the hooks you need, and add it to the
   ordered list in `src/atom/agent.py::_build_middlewares`.
 

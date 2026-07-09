@@ -67,6 +67,17 @@ def test_render_task_prompt_templates_inputs(atom_home):
     assert render_task_prompt(wf.steps[0].tasks[0], inputs) == "Write about rain in haiku."
 
 
+def test_notes_smoke_workflow_valid():
+    import yaml
+    from pathlib import Path
+
+    data = yaml.safe_load(Path("workflows/notes-smoke.yaml").read_text())
+    wf = WorkflowDef.model_validate(data)
+    assert wf.name == "notes-smoke"
+    assert wf.notes.enabled is True
+    assert [s.title for s in wf.steps] == ["Recall", "Record"]
+
+
 def test_duplicate_task_ids_rejected():
     with pytest.raises(Exception):
         StepDef(title="s", tasks=[TaskDef(id="x", prompt="a"), TaskDef(id="x", prompt="b")])
