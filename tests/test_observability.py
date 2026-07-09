@@ -160,3 +160,20 @@ def test_build_subagent_trace_none_base_returns_none():
         rendered_prompt="p", subagent_prompt_ref="r", recursion_limit=300,
         obs=ObservabilityConfig(),
     ) is None
+
+
+def test_public_import_surface_after_package_move():
+    # Every name any other module imports from atom.observability must still resolve
+    # from the package root after the module -> package conversion.
+    from atom.observability import (
+        _apply_trace,
+        apply_observability_env,
+        build_lead_trace,
+        build_subagent_trace,
+        enrich_lead_trace,
+        git_sha,
+        prompt_fingerprint,
+        tracing_active,
+    )
+    assert callable(apply_observability_env) and callable(build_lead_trace)
+    assert callable(_apply_trace) and callable(enrich_lead_trace)
