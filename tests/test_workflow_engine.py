@@ -468,3 +468,19 @@ async def test_execute_skips_flush_when_inactive(base_config, monkeypatch):
     engine.create_run(_one_task_wf(), {"topic": "sea"}, "runG", "2026-07-09T00:00:00")
     await engine.execute("runG")
     assert calls == []  # tracing off -> no flush
+
+
+@pytest.mark.asyncio
+async def test_execute_flush_failure_does_not_break_run(base_config, monkeypatch):
+    """FIX: a raising flush must never mask a propagating exception or break the run."""
+    def boom():
+        raise RuntimeError("langsmith flush exploded")
+    monkeypatch.setattr(engine_mod, "tracing_active", lambda: True)
+    monkeypatch.setattr(engine_mod, "wait_for_all_tracers", boom)
+    engine = WorkflowEngine(
+        base_config,
+        prepared_provider=lambda td, sd, wf: make_prepared([AIMessage(content="done")]),
+    )
+    engine.create_run(_one_task_wf(), {"topic": "sea"}, "runH", "2026-07-09T00:00:00")
+    manifest = await engine.execute("runH")   # must NOT raise despite the flush blowing up
+    assert manifest.status == "complete"

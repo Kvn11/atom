@@ -205,7 +205,10 @@ class WorkflowEngine:
             # Flush LangSmith's background trace queue before the process can exit, so the run's
             # final batch is guaranteed uploaded and downloadable. No-op when tracing is off.
             if tracing_active():
-                wait_for_all_tracers()
+                try:
+                    wait_for_all_tracers()
+                except Exception:  # noqa: BLE001 — a flush failure must never mask a propagating exception
+                    pass
 
     async def _run_task(
         self, manifest: RunManifest, workflow: WorkflowDef,
