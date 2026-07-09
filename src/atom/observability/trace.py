@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import os
 import subprocess
+from dataclasses import dataclass
 from typing import Any
 
 from atom.config.schema import AgentProfile, AtomConfig, ObservabilityConfig
@@ -42,19 +43,42 @@ def git_sha() -> str | None:
         return None
 
 
-def apply_observability_env(cfg: AtomConfig) -> None:
+@dataclass
+class ObservabilityStatus:
+    """Result of mapping the observability config onto LANGSMITH_* env.
+
+    reason: "active" | "enabled-but-no-api-key" | "disabled".
+    """
+    active: bool
+    project: str | None
+    reason: str
+
+
+def apply_observability_env(cfg: AtomConfig) -> ObservabilityStatus:
     """Map the observability config block onto LANGSMITH_* env, never overwriting existing vars.
 
     Tracing is enabled only when requested AND an API key is present, so a half-configured setup is a
-    safe no-op rather than a crash or a keyless export attempt. Idempotent.
+    safe no-op rather than a crash or a keyless export attempt. Idempotent. Returns a status describing
+    whether tracing is (now) active so callers can surface a one-line activation notice.
     """
     obs = cfg.observability
     tracing_on = tracing_active()
-    will_enable = bool(obs.enabled and os.environ.get("LANGSMITH_API_KEY") and not os.environ.get("LANGSMITH_TRACING"))
+    have_key = bool(os.environ.get("LANGSMITH_API_KEY"))
+    will_enable = bool(obs.enabled and have_key and not os.environ.get("LANGSMITH_TRACING"))
     if (tracing_on or will_enable) and obs.project and not os.environ.get("LANGSMITH_PROJECT"):
         os.environ["LANGSMITH_PROJECT"] = obs.project
     if will_enable:
         os.environ["LANGSMITH_TRACING"] = "true"
+
+    if tracing_on or will_enable:
+        return ObservabilityStatus(
+            active=True,
+            project=os.environ.get("LANGSMITH_PROJECT") or obs.project,
+            reason="active",
+        )
+    if obs.enabled and not have_key:
+        return ObservabilityStatus(active=False, project=obs.project, reason="enabled-but-no-api-key")
+    return ObservabilityStatus(active=False, project=None, reason="disabled")
 
 
 def _apply_trace(run_config: dict, trace: dict | None) -> dict:

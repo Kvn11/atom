@@ -28,6 +28,19 @@ def _read_call(path, cid):
 WS = "/mnt/user-data/workspace"
 
 
+def test_engine_warns_when_enabled_but_no_api_key(base_config, monkeypatch, caplog):
+    import logging
+    from atom.config.schema import ObservabilityConfig
+
+    monkeypatch.delenv("LANGSMITH_API_KEY", raising=False)
+    monkeypatch.delenv("LANGSMITH_TRACING", raising=False)
+    cfg = base_config.model_copy(deep=True)
+    cfg.observability = ObservabilityConfig(enabled=True, project="proj")
+    with caplog.at_level(logging.WARNING):
+        WorkflowEngine(cfg)
+    assert any("LANGSMITH_API_KEY missing" in r.message for r in caplog.records)
+
+
 def _draft_only() -> WorkflowDef:
     return WorkflowDef.model_validate({
         "name": "demo",

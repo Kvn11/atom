@@ -5,6 +5,7 @@ import os
 
 from atom.config.schema import AgentProfile, AtomConfig, ObservabilityConfig
 from atom.observability import (
+    ObservabilityStatus,
     apply_observability_env,
     build_lead_trace,
     build_subagent_trace,
@@ -60,6 +61,35 @@ def test_apply_env_no_key_no_enable(monkeypatch):
     apply_observability_env(cfg)
     assert "LANGSMITH_TRACING" not in os.environ  # no key -> safe no-op
     assert "LANGSMITH_PROJECT" not in os.environ  # tracing won't enable -> project must not be set
+
+
+def test_apply_env_status_active(monkeypatch):
+    monkeypatch.delenv("LANGSMITH_TRACING", raising=False)
+    monkeypatch.delenv("LANGSMITH_PROJECT", raising=False)
+    monkeypatch.setenv("LANGSMITH_API_KEY", "k")
+    cfg = AtomConfig(observability=ObservabilityConfig(enabled=True, project="proj"))
+    status = apply_observability_env(cfg)
+    assert status.active is True
+    assert status.reason == "active"
+    assert status.project == "proj"
+
+
+def test_apply_env_status_enabled_but_no_key(monkeypatch):
+    monkeypatch.delenv("LANGSMITH_TRACING", raising=False)
+    monkeypatch.delenv("LANGSMITH_API_KEY", raising=False)
+    monkeypatch.delenv("LANGSMITH_PROJECT", raising=False)
+    cfg = AtomConfig(observability=ObservabilityConfig(enabled=True, project="proj"))
+    status = apply_observability_env(cfg)
+    assert status.active is False
+    assert status.reason == "enabled-but-no-api-key"
+
+
+def test_apply_env_status_disabled(monkeypatch):
+    monkeypatch.delenv("LANGSMITH_TRACING", raising=False)
+    monkeypatch.delenv("LANGSMITH_API_KEY", raising=False)
+    cfg = AtomConfig(observability=ObservabilityConfig(enabled=False))
+    status = apply_observability_env(cfg)
+    assert status.active is False and status.reason == "disabled"
 
 
 def test_build_lead_trace_shape():

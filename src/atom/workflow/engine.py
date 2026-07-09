@@ -9,7 +9,10 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import logging
 from typing import Awaitable, Callable, Optional
+
+logger = logging.getLogger(__name__)
 
 from atom.agent import PreparedModel
 from atom.config.schema import AtomConfig
@@ -61,7 +64,14 @@ class WorkflowEngine:
         # left untouched. Built once here (never mutates self.cfg in place).
         self._task_cfg = self._build_task_cfg(cfg)
         # Map observability config -> LANGSMITH_* env once, before any run (idempotent).
-        apply_observability_env(cfg)
+        status = apply_observability_env(cfg)
+        if status.active:
+            logger.info("observability: tracing active -> project %r", status.project)
+        elif status.reason == "enabled-but-no-api-key":
+            logger.warning(
+                "observability: observability.enabled but LANGSMITH_API_KEY missing "
+                "-- traces will NOT be uploaded"
+            )
 
     def _build_task_cfg(self, cfg: AtomConfig) -> AtomConfig:
         if not cfg.sandbox.allowed_workspace_roots:

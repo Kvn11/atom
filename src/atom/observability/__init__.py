@@ -6,6 +6,7 @@ names so ``from atom.observability import build_lead_trace`` (and friends) keeps
 working unchanged after the module -> package conversion.
 """
 from atom.observability.trace import (
+    ObservabilityStatus,
     _apply_trace,
     apply_observability_env,
     build_lead_trace,
@@ -17,6 +18,7 @@ from atom.observability.trace import (
 )
 
 __all__ = [
+    "ObservabilityStatus",
     "_apply_trace",
     "apply_observability_env",
     "build_lead_trace",
