@@ -253,6 +253,10 @@ def workflow_export(
         except RuntimeError as e:                       # missing API key — abort the whole command
             console.print(f"[red]{e}[/red]")
             raise typer.Exit(1)
+        except Exception as e:  # noqa: BLE001 — surface LangSmith API/network errors cleanly, don't traceback
+            console.print(f"[red]export failed for {rid}: {type(e).__name__}: {e}[/red]")
+            errors = True
+            continue
         if result.fetched_roots == 0:
             console.print(
                 f"[red]no traces found for {rid} — was observability enabled when it ran?[/red]"

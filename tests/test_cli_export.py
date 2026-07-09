@@ -65,3 +65,23 @@ def test_export_missing_key_exits_1(monkeypatch):
     res = runner.invoke(app, ["workflow", "export", "r1", "--project", "proj"])
     assert res.exit_code == 1
     assert "LANGSMITH_API_KEY" in res.stdout
+
+
+def test_export_api_error_exits_1(monkeypatch):
+    monkeypatch.setattr(export_mod, "resolve_run_ids", lambda home, **kw: ["r1"])
+    def boom(home, rid, *, project, **kw):
+        raise ConnectionError("langsmith unreachable")
+    monkeypatch.setattr(export_mod, "export_run", boom)
+    res = runner.invoke(app, ["workflow", "export", "r1", "--project", "proj"])
+    assert res.exit_code == 1
+    assert "export failed for r1" in res.stdout
+
+
+def test_export_run_not_found_exits_1(monkeypatch):
+    monkeypatch.setattr(export_mod, "resolve_run_ids", lambda home, **kw: ["ghost"])
+    def missing(home, rid, *, project, **kw):
+        raise FileNotFoundError(rid)
+    monkeypatch.setattr(export_mod, "export_run", missing)
+    res = runner.invoke(app, ["workflow", "export", "ghost", "--project", "proj"])
+    assert res.exit_code == 1
+    assert "not found" in res.stdout
