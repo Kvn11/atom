@@ -85,6 +85,7 @@ async def run_agent(
     override_system_prompt: str | None = None,
     trace: dict | None = None,
     prepared: PreparedModel | None = None,
+    notes: dict | None = None,
 ) -> RunResult:
     """Run the lead agent on ``task`` and return the final result.
 
@@ -116,7 +117,7 @@ async def run_agent(
         agent = build_lead_agent(
             cfg, profile_name, prepared=prepared, checkpointer=cp,
             override_model=override_model, override_thinking=override_thinking,
-            override_system_prompt=override_system_prompt, trace=trace,
+            override_system_prompt=override_system_prompt, trace=trace, notes=notes,
         )
         run_config = build_run_config(thread_id, prof.recursion_limit, trace)
         result = await agent.ainvoke(

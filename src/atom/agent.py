@@ -97,6 +97,7 @@ def build_lead_agent(
     override_thinking: str | int | None = None,
     override_system_prompt: str | None = None,
     trace: dict | None = None,
+    notes: dict | None = None,
 ):
     """Construct the compiled lead agent for a profile."""
     from atom.tools.registry import FREQUENT_ELIGIBLE
@@ -150,6 +151,7 @@ def build_lead_agent(
         skill_catalog=skill_catalog,
         has_tool_library=library.has_tools,
         has_skill_library=library.has_skills,
+        notes=notes,
         system_prompt_ref=override_system_prompt,
     )
     from atom.observability import enrich_lead_trace, tracing_active

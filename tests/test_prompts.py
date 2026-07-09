@@ -37,6 +37,29 @@ def test_default_lead_prompt_renders_and_reflects_toggles(base_config):
     assert "search_skills" not in out     # has_skill_library False -> that bullet absent
 
 
+def test_lead_prompt_notes_block_renders(base_config):
+    from atom.agent import render_lead_system_prompt
+
+    prof = base_config.profile("default")
+    out = render_lead_system_prompt(
+        base_config, prof, "default", {"supports_vision": True},
+        frequent_tool_names=["read_file"],
+        notes={"provider": "logseq", "root_dir": "/n/notes-smoke", "graph": "notes-smoke"},
+    )
+    assert "Persistent notes" in out
+    assert "notes-smoke" in out and "/n/notes-smoke" in out
+
+
+def test_lead_prompt_no_notes_block_when_absent(base_config):
+    from atom.agent import render_lead_system_prompt
+
+    prof = base_config.profile("default")
+    out = render_lead_system_prompt(
+        base_config, prof, "default", {"supports_vision": True},
+        frequent_tool_names=["read_file"])
+    assert "Persistent notes" not in out
+
+
 def test_ask_clarification_is_return_direct():
     from atom.tools.clarification import ask_clarification
 
