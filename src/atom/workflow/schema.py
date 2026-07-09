@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import datetime
 from pathlib import Path
-from typing import Optional, Union
+from typing import Literal, Optional, Union
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -21,6 +21,14 @@ class InputDef(_Base):
     required: bool = False
     description: Optional[str] = None
     default: Optional[str] = None
+
+
+class NotesConfig(_Base):
+    """Opt-in persistent notes for a workflow (a per-workflow Logseq vault shared across runs)."""
+
+    enabled: bool = False
+    provider: Literal["logseq"] = "logseq"
+    graph: Optional[str] = None   # default (resolved in atom.notes): slug of the workflow name
 
 
 class TaskDef(_Base):
@@ -58,6 +66,7 @@ class WorkflowDef(_Base):
     name: str
     description: Optional[str] = None
     inputs: list[InputDef] = Field(default_factory=list)
+    notes: NotesConfig = Field(default_factory=NotesConfig)
     steps: list[StepDef] = Field(default_factory=list)
 
     @field_validator("steps")

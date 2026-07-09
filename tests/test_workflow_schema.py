@@ -77,6 +77,23 @@ def test_empty_steps_rejected():
         WorkflowDef(name="w", steps=[])
 
 
+def test_notes_defaults_disabled():
+    wf = WorkflowDef.model_validate(
+        {"name": "w", "steps": [{"title": "s", "tasks": [{"prompt": "p"}]}]})
+    assert wf.notes.enabled is False
+    assert wf.notes.provider == "logseq"
+    assert wf.notes.graph is None
+
+
+def test_notes_block_parses():
+    wf = WorkflowDef.model_validate({
+        "name": "w",
+        "notes": {"enabled": True, "graph": "my-graph"},
+        "steps": [{"title": "s", "tasks": [{"prompt": "p"}]}],
+    })
+    assert wf.notes.enabled is True and wf.notes.graph == "my-graph"
+
+
 def test_resolve_inputs_treats_null_as_missing(atom_home):
     _write(atom_home, "demo", DEMO)
     wf = load_workflow("demo", str(atom_home))
