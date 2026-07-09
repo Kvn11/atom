@@ -69,7 +69,8 @@ def test_build_lead_trace_shape():
         task_id="poet_a", session_id="r1:s0:poet_a", obs=obs,
     )
     assert t["run_name"] == "poems/Draft/poet_a"
-    assert "atom-workflow" in t["tags"] and "role:lead" in t["tags"]
+    # Leads carry no role tag (role is metadata-only) so it can't leak onto nested sub-agent runs.
+    assert "atom-workflow" in t["tags"] and "role:lead" not in t["tags"]
     assert "team:atom" in t["tags"]
     md = t["metadata"]
     assert md["session_id"] == "r1:s0:poet_a"

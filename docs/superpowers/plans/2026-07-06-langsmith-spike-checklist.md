@@ -22,25 +22,28 @@ sub-agent. Traces were queried back via the LangSmith SDK (`list_runs` + `list_t
 - [x] LangGraph's auto `metadata.thread_id` (unique child id) did **not** split the sub-agent into its
       own thread; the sub-agent nests within the lead's single trace/thread.
 
-## Finding (minor, tag hygiene) — filter on metadata, not `role:*` tags
+## Finding (tag hygiene) — RESOLVED 2026-07-09
 
-The sub-agent run carries **both `role:subagent` and a leaked `role:lead` tag**. Cause: LangChain
-*unions* run **tags** from parent → child down the trace tree, so the lead's `role:lead` rides onto the
-nested sub-agent run even though `build_subagent_trace` strips `role:lead` from the trace it sets. This
-is a LangChain tracer behavior, not controllable via the run-config dict (tags are additive/inheritable;
-there is no clean per-child tag removal through `config`).
+**Original observation:** the sub-agent run carried **both `role:subagent` and a leaked `role:lead`
+tag**. Cause: LangChain *unions* run **tags** parent → child down the trace tree, so a lead's `role:lead`
+tag rides onto its nested sub-agent runs. Run **metadata** is key-overridden (not unioned), so
+`agent_role`/`is_subagent`/`session_id`/`subagent_type` were always clean; only the `role:lead` *tag*
+leaked.
 
-Impact: **none on threading or metadata.** Run **metadata** is key-overridden (not unioned), so
-`agent_role`/`is_subagent`/`session_id`/`subagent_type` are clean and correct on both runs. Only the
-`role:lead` *tag* is polluted onto sub-agents.
+**Fix applied (commit on `main`):** leads now carry **no role tag at all** — role is metadata-only
+(`agent_role` / `is_subagent`) for leads, which cannot leak since metadata is per-key overridden.
+Sub-agents keep a clean `role:subagent` (+ `subagent_type:*`) tag, which only flows *downward* onto their
+own children and never up onto leads. Implemented by removing `"role:lead"` from `build_lead_trace`
+(`src/atom/observability.py`); `build_subagent_trace` retains its defensive `role:lead` strip.
 
-**Guidance:** to distinguish leads from sub-agents, filter on **metadata** — `is_subagent` (bool) or
-`agent_role` — which is authoritative. `role:subagent` / `subagent_type:*` tags are also unambiguous for
-*finding* sub-agents; only "leads-only via the `role:lead` tag" is unreliable (it also matches
-sub-agents) — use `is_subagent = false` instead.
+**Re-verified live (project `atom`):** lead tags = `[model:*, profile:*, atom-workflow, workflow:*,
+step:*, task:*, run:*]` (no `role:lead`); sub-agent tags = `[…, role:subagent, subagent_type:*]` (no
+`role:lead`). Thread grouping via `session_id` still intact. `scratchpad/obs_smoketest.py` asserts the
+leak is gone.
 
-Open decision (not yet actioned): whether to keep the `role:*` tags as-is (metadata is the source of
-truth) or drop them in favor of metadata-only role filtering to avoid the leak. Left to Kevin.
+**Filtering guidance:** find sub-agent work via the `role:subagent` tag (or `is_subagent`/`agent_role`
+metadata); find lead runs via `is_subagent = false` / `agent_role = lead` metadata (leads intentionally
+have no role tag).
 
 ## Reproduce
 

@@ -358,4 +358,5 @@ async def test_task_trace_carries_session_id(base_config, atom_home, monkeypatch
     sids = {t["metadata"]["session_id"] for t in traces}
     assert sids == {"runx:s0:poet_a", "runx:s0:poet_b"}  # distinct thread per task
     assert all(t["metadata"]["agent_role"] == "lead" for t in traces)
-    assert all("role:lead" in t["tags"] for t in traces)
+    # Leads carry no role tag (role lives in metadata) so it can't leak onto nested sub-agent runs.
+    assert all("role:lead" not in t["tags"] for t in traces)

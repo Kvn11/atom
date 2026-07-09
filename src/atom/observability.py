@@ -77,7 +77,11 @@ def build_lead_trace(
         f"step:{step_title}",
         f"task:{task_id}",
         f"run:{run_id}",
-        "role:lead",
+        # NOTE: leads deliberately carry NO role tag. LangChain unions tags parent->child down the
+        # trace tree, so a "role:lead" tag would leak onto nested sub-agent runs. Role lives in
+        # metadata (agent_role / is_subagent), which is key-overridden per run and never leaks.
+        # Sub-agents still get a clean "role:subagent" tag (it only flows downward, onto their own
+        # children — never up onto leads).
         *obs.default_tags,
     ]
     metadata = {
