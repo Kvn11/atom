@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from langchain_core.messages import ToolMessage
@@ -49,11 +50,14 @@ def search_tools(runtime: ToolRuntime, query: str) -> Command:
 
 @tool(parse_docstring=True)
 def search_skills(runtime: ToolRuntime, query: str, max_results: int = 3) -> Command:
-    """Search the skill library for a step-by-step guide and load the best match(es).
+    """Search the skill library to discover skills relevant to a task.
+
+    Returns each match's name and description. To use one, load its full instructions with
+    load_skill("<name>").
 
     Args:
         query: Describe the task or workflow you need guidance for.
-        max_results: Maximum number of skills to load.
+        max_results: Maximum number of skills to list.
     """
     index = get_index(_home(runtime))
     tcid = runtime.tool_call_id
@@ -62,14 +66,38 @@ def search_skills(runtime: ToolRuntime, query: str, max_results: int = 3) -> Com
     matches = index.search_skills(query, k=max_results, min_score=index.min_score)
     if not matches:
         return Command(update={"messages": [ToolMessage("No matching skills found.", tool_call_id=tcid)]})
-    prev = runtime.state.get("promoted_skills") or []
-    names = [m.name for m in matches]
-    # Record the promotion + confirm; the full body is injected transiently each turn by
-    # SkillLibraryMiddleware (so it survives compaction instead of being summarized out of history).
-    content = "Loaded skill guide(s): " + ", ".join(names) + ". Follow them for this task."
-    return Command(
-        update={
-            "promoted_skills": sorted(set(prev) | set(names)),
-            "messages": [ToolMessage(content, tool_call_id=tcid)],
-        }
+    listing = "\n".join(f"- {m.name}: {m.description}" for m in matches)
+    content = (
+        'Found these skills. Load one with load_skill("<name>") to get its full instructions:\n'
+        + listing
     )
+    return Command(update={"messages": [ToolMessage(content, tool_call_id=tcid)]})
+
+
+@tool(parse_docstring=True)
+def load_skill(runtime: ToolRuntime, name: str) -> Command:
+    """Load a skill's full instructions into context by its exact name.
+
+    Use a name shown in the skills catalog or returned by search_skills.
+
+    Args:
+        name: The exact skill name to load (e.g. "logseq-cli").
+    """
+    tcid = runtime.tool_call_id
+    clean = (name or "").strip()
+    if not clean or "/" in clean or "\\" in clean or ".." in clean:
+        return Command(update={"messages": [ToolMessage(f"Invalid skill name '{name}'.", tool_call_id=tcid)]})
+    home = _home(runtime)
+    found = bool(home) and any(
+        (Path(home) / base / clean / "SKILL.md").exists() for base in ("skills", "skill_library")
+    )
+    if not found:
+        return Command(update={"messages": [ToolMessage(
+            f"No skill named '{clean}' found. Check the skills catalog or use search_skills.",
+            tool_call_id=tcid)]})
+    # promoted_skills is a union-reducer channel (merge_name_list); returning just this name suffices.
+    return Command(update={
+        "promoted_skills": [clean],
+        "messages": [ToolMessage(
+            f"Loaded skill '{clean}'. Follow its instructions for this task.", tool_call_id=tcid)],
+    })

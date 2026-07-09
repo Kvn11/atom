@@ -139,19 +139,18 @@ async def test_parallel_search_tools_does_not_crash(base_config, atom_home):
 
 
 @pytest.mark.asyncio
-async def test_search_skills_records_promotion_and_confirms(base_config, atom_home):
+async def test_search_skills_lists_without_loading(base_config, atom_home):
     seed_library(atom_home)
     prepared = make_prepared([
         AIMessage(content="", tool_calls=[_tc("search_skills", {"query": "extract pdf text"}, "k1")]),
-        AIMessage(content="Following the pdf-extract skill now."),
+        AIMessage(content="Now I'll load the pdf-extract skill."),
     ])
     result = await run_agent("get text from a pdf", config=base_config, prepared=prepared)
-    assert "pdf-extract" in result.state.get("promoted_skills", [])
+    # search_skills is discovery-only: it lists matches but does NOT load/promote anything.
+    assert "pdf-extract" not in result.state.get("promoted_skills", [])
     tool_msgs = [m for m in result.messages if isinstance(m, ToolMessage)]
-    # The ToolMessage is a short confirmation; the BODY is injected transiently by
-    # SkillLibraryMiddleware (not persisted into history / summarized away).
-    assert any("pdf-extract" in m.content for m in tool_msgs)
-    assert not any("extract each page" in m.content for m in tool_msgs)  # body not persisted
+    assert any("pdf-extract" in m.content and "load_skill" in m.content for m in tool_msgs)
+    assert not any("extract each page" in m.content for m in tool_msgs)  # body not surfaced
 
 
 def test_ranker_min_score_and_catalog_hash(atom_home):
