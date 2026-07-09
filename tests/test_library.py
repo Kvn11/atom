@@ -214,6 +214,34 @@ def test_skill_library_injects_promoted_bodies_transiently(atom_home):
     assert mw._inject(_FakeRequest(tools=[], state={}, messages=list(base))).messages == base
 
 
+def test_load_skill_catalog_autodiscovers_skills_folder(atom_home):
+    from atom.library import load_skill_catalog
+
+    d = atom_home / "skills" / "logseq-cli"
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text(
+        "---\nname: logseq-cli\ndescription: Operate the Logseq CLI\n---\nFULL BODY HERE"
+    )
+    catalog = load_skill_catalog(atom_home, [])
+    assert [e.name for e in catalog] == ["logseq-cli"]
+    assert catalog[0].description == "Operate the Logseq CLI"
+
+
+def test_load_skill_catalog_adds_library_extras_and_dedupes(atom_home):
+    from atom.library import load_skill_catalog
+
+    (atom_home / "skills" / "a").mkdir(parents=True)
+    (atom_home / "skills" / "a" / "SKILL.md").write_text(
+        "---\nname: a\ndescription: skill a\n---\nBODY"
+    )
+    (atom_home / "skill_library" / "b").mkdir(parents=True)
+    (atom_home / "skill_library" / "b" / "SKILL.md").write_text(
+        "---\nname: b\ndescription: skill b\n---\nBODY"
+    )
+    names = [e.name for e in load_skill_catalog(atom_home, ["b", "a"])]
+    assert names == ["a", "b"]  # a from folder; b pulled from library; a not duplicated
+
+
 @pytest.mark.asyncio
 async def test_search_tools_promotes_at_most_auto_promote_k(base_config, atom_home):
     seed_library(atom_home)

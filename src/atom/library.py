@@ -264,6 +264,19 @@ def load_named_skills(home: Path | str, names: list[str]) -> list[SkillEntry]:
     return out
 
 
+def load_skill_catalog(home: Path | str, extra_names: list[str]) -> list[SkillEntry]:
+    """Always-on catalog: every skill in ``skills/`` plus any ``extra_names`` (from a profile's
+    ``skills.frequent``) not already present. Deduped by name; only name/description are surfaced."""
+    home = Path(home)
+    entries = load_skill_entries(home / "skills")
+    have = {e.name for e in entries}
+    for entry in load_named_skills(home, extra_names):
+        if entry.name not in have:
+            entries.append(entry)
+            have.add(entry.name)
+    return entries
+
+
 # ------------------------------------------------------------------ registry
 
 _lock = threading.Lock()
