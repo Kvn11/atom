@@ -85,6 +85,21 @@ across runs) and injects a snippet into each task's system prompt telling the ag
 is and to `load_skill("logseq-cli")` for the CLI commands. Try it with `workflows/notes-smoke.yaml`
 (run it twice — the second run recalls the first run's entry).
 
+#### Exporting a run for offline evaluation
+
+If the run was executed with observability enabled (`observability.enabled: true` and a
+`LANGSMITH_API_KEY` in the environment), download its full LangSmith trace tree to disk:
+
+    atom workflow export <run_id>              # one run by id
+    atom workflow export --latest <workflow>   # newest run of a workflow
+    atom workflow export --all <workflow>      # every run of a workflow
+
+This writes `$ATOM_HOME/workflows/runs/<run_id>/export.json` — a self-contained record holding the
+raw LangSmith run tree (lead tasks plus nested sub-agent and per-LLM-call runs, with reasoning/thinking
+blocks intact), the run's `run.json` manifest (inputs + per-task verdict), and a `complete` flag. It is
+the input to the separate offline evaluation pipeline. Runs executed without observability have nothing
+to download (the command reports "no traces found").
+
 ## Observability (LangSmith)
 
 Workflow runs can be traced to [LangSmith](https://smith.langchain.com). Enable it via the

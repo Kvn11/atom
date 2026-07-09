@@ -216,6 +216,59 @@ def workflow_runs(config: str = typer.Option(None, "--config", "-c")) -> None:
         console.print(f"{m.run_id}  [bold]{m.workflow}[/bold]  [dim]{m.status}  {m.created_at}[/dim]")
 
 
+@workflow_app.command("export")
+def workflow_export(
+    run_id: str = typer.Argument(None, help="Run id to export."),
+    latest: str = typer.Option(None, "--latest", help="Export the newest run of this workflow."),
+    all_workflow: str = typer.Option(None, "--all", help="Export every run of this workflow."),
+    project: str = typer.Option(None, "--project", help="LangSmith project (default: observability.project)."),
+    config: str = typer.Option(None, "--config", "-c"),
+) -> None:
+    """Download a run's LangSmith traces to runs/<run_id>/export.json (for offline evaluation)."""
+    from atom.observability import export as export_mod
+
+    _load_env()
+    cfg = load_config(config)
+    proj = project or cfg.observability.project
+    if not proj:
+        console.print("[red]no LangSmith project — set observability.project or pass --project[/red]")
+        raise typer.Exit(1)
+
+    try:
+        run_ids = export_mod.resolve_run_ids(
+            cfg.home, run_id=run_id, latest=latest, all_workflow=all_workflow
+        )
+    except ValueError as e:
+        console.print(f"[red]{e}[/red]")
+        raise typer.Exit(1)
+
+    errors = False
+    for rid in run_ids:
+        try:
+            result = export_mod.export_run(cfg.home, rid, project=proj)
+        except FileNotFoundError:
+            console.print(f"[red]run '{rid}' not found[/red]")
+            errors = True
+            continue
+        except RuntimeError as e:                       # missing API key — abort the whole command
+            console.print(f"[red]{e}[/red]")
+            raise typer.Exit(1)
+        if result.fetched_roots == 0:
+            console.print(
+                f"[red]no traces found for {rid} — was observability enabled when it ran?[/red]"
+            )
+            errors = True
+            continue
+        if not result.complete:
+            console.print(
+                f"[yellow]partial: {rid} {result.fetched_roots}/{result.expected_roots} "
+                f"task traces (async ingestion may still be catching up)[/yellow]"
+            )
+        console.print(f"exported {rid} → {result.path}")
+    if errors:
+        raise typer.Exit(1)
+
+
 @app.command()
 def serve(
     host: str = typer.Option("127.0.0.1", "--host"),
