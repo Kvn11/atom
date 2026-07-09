@@ -69,6 +69,41 @@ def test_lead_prompt_keeps_contract_and_adds_discipline(base_config):
     assert "Plan before you act" in out                   # planning discipline anchor
 
 
+def test_lead_prompt_renders_skill_catalog_not_body(base_config):
+    from atom.agent import render_lead_system_prompt
+
+    prof = base_config.profile("default")
+    out = render_lead_system_prompt(
+        base_config, prof, "default", {"supports_vision": True},
+        frequent_tool_names=["read_file", "load_skill"],
+        skill_catalog=[{"name": "logseq-cli", "description": "Operate the Logseq CLI"}],
+        has_tool_library=False, has_skill_library=False,
+    )
+    assert "logseq-cli" in out and "Operate the Logseq CLI" in out
+    assert "load_skill" in out
+    assert "FULL BODY" not in out               # only frontmatter, never the body
+    assert "Skills (load before use)" in out
+
+
+@pytest.mark.asyncio
+async def test_load_skill_tool_bound_when_skill_present(base_config, atom_home):
+    from langchain_core.messages import AIMessage, ToolMessage
+    from atom.runtime import run_agent
+    from tests.conftest import make_prepared
+
+    d = atom_home / "skills" / "logseq-cli"
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text("---\nname: logseq-cli\ndescription: Operate Logseq\n---\nUSE THE CLI")
+    prepared = make_prepared([
+        AIMessage(content="", tool_calls=[
+            {"name": "load_skill", "args": {"name": "logseq-cli"}, "id": "l1", "type": "tool_call"}]),
+        AIMessage(content="done"),
+    ])
+    result = await run_agent("do it", config=base_config, prepared=prepared)
+    tool_msgs = [m for m in result.messages if isinstance(m, ToolMessage)]
+    assert any("Loaded skill 'logseq-cli'" in m.content for m in tool_msgs)
+
+
 def test_subagent_prompts_render_and_report_contract():
     from atom.prompts.render import render_prompt
 

@@ -16,7 +16,7 @@ from langchain.agents.middleware import AgentMiddleware, TodoListMiddleware
 from langchain_core.language_models import BaseChatModel
 
 from atom.config.schema import AgentProfile, AtomConfig
-from atom.library import LibraryIndex, load_library, load_named_skills, register_index
+from atom.library import LibraryIndex, load_library, load_skill_catalog, register_index
 from atom.models import build_model, clamp_concurrency, model_caps, resolve_context_window, resolve_spec
 from atom.prompts import render_prompt
 from atom.sandbox.paths import (
@@ -30,7 +30,7 @@ from atom.sandbox.provider import LocalSandboxProvider
 from atom.state import ThreadState, WorkspaceContext
 from atom.subagent import SubagentRunner
 from atom.tools.registry import assemble_frequent_tools
-from atom.tools.search import search_skills, search_tools
+from atom.tools.search import load_skill, search_skills, search_tools
 
 
 @dataclass
@@ -60,9 +60,10 @@ def render_lead_system_prompt(
     caps: dict[str, Any],
     *,
     frequent_tool_names: list[str] | None = None,
-    frequent_skills: list[Any] | None = None,
+    skill_catalog: list[dict] | None = None,
     has_tool_library: bool = False,
     has_skill_library: bool = False,
+    notes: dict | None = None,
     system_prompt_ref: str | None = None,
 ) -> str:
     ctx = {
@@ -75,7 +76,9 @@ def render_lead_system_prompt(
         # The EFFECTIVE bound tool names (post capability/bash filtering), not the raw config list,
         # so the prompt never advertises a tool that isn't actually available to the model.
         "frequent_tool_names": frequent_tool_names if frequent_tool_names is not None else profile.tools.frequent,
-        "frequent_skills": [{"name": s.name, "body": s.body} for s in (frequent_skills or [])],
+        # Always-on catalog: name + description only (bodies are loaded on demand via load_skill).
+        "skill_catalog": list(skill_catalog or []),
+        "notes": notes,
         "bash_enabled": cfg.sandbox.bash_enabled,
         "supports_vision": caps.get("supports_vision", False),
         "has_tool_library": has_tool_library,
@@ -113,7 +116,9 @@ def build_lead_agent(
     library.auto_promote_k = cfg.library.auto_promote_k  # wire promotion tuning from config
     library.min_score = cfg.library.min_score
     register_index(home, library)
-    frequent_skills = load_named_skills(home, profile.skills.frequent)
+    catalog_entries = load_skill_catalog(home, profile.skills.frequent)
+    skill_catalog = [{"name": s.name, "description": s.description} for s in catalog_entries]
+    has_any_skills = bool(catalog_entries) or library.has_skills
 
     frequent_tools = assemble_frequent_tools(cfg, profile, prepared.caps)
     tools = list(frequent_tools)
@@ -123,6 +128,8 @@ def build_lead_agent(
         tools.append(search_tools)
     if library.has_skills:
         tools.append(search_skills)
+    if has_any_skills:
+        tools.append(load_skill)
 
     # The EFFECTIVE callable set for the prompt: profile-controlled frequent tools that survived
     # capability/bash filtering, plus the always-on tools contributed by middleware.
@@ -132,13 +139,15 @@ def build_lead_agent(
         extras.append("search_tools")
     if library.has_skills:
         extras.append("search_skills")
+    if has_any_skills:
+        extras.append("load_skill")
     tool_names = effective + [e for e in extras if e not in effective]
 
     summarizer = _build_summarizer(profile, prepared)
     system_prompt = render_lead_system_prompt(
         cfg, profile, profile_name, prepared.caps,
         frequent_tool_names=tool_names,
-        frequent_skills=frequent_skills,
+        skill_catalog=skill_catalog,
         has_tool_library=library.has_tools,
         has_skill_library=library.has_skills,
         system_prompt_ref=override_system_prompt,
@@ -154,7 +163,10 @@ def build_lead_agent(
             override_system_prompt=override_system_prompt,
         )
         mw_trace = trace
-    middleware = _build_middlewares(cfg, profile, prepared, provider, home, summarizer, library, mw_trace)
+    middleware = _build_middlewares(
+        cfg, profile, prepared, provider, home, summarizer, library, mw_trace,
+        skill_catalog=skill_catalog,
+    )
 
     return create_agent(
         model=prepared.model,
@@ -183,6 +195,8 @@ def _build_middlewares(
     summarizer: BaseChatModel,
     library: LibraryIndex,
     trace: dict | None = None,
+    *,
+    skill_catalog: list[dict] | None = None,
 ) -> list[AgentMiddleware]:
     # Local imports keep the ordered list readable and avoid import cycles.
     from atom.middleware.clarification import ClarificationMiddleware
@@ -256,8 +270,8 @@ def _build_middlewares(
         LLMErrorHandlingMiddleware(),                    # 5. outermost: retry/normalize provider errors
         SkillActivationMiddleware(home=home),            # 6. inject /skill-name body (transient)
     ]
-    if library.has_skills:
-        chain.append(SkillLibraryMiddleware(home=home))  # inject promoted-skill bodies (transient)
+    if library.has_skills or skill_catalog:
+        chain.append(SkillLibraryMiddleware(home=home))  # inject loaded-skill bodies (transient)
     if prepared.caps.get("supports_vision"):
         chain.append(ViewImageMiddleware())              # 7. inject images (vision models only)
     if deferred_names:
