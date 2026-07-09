@@ -32,8 +32,8 @@ guardrails:
   enabled: false           # dormant seam; turn on to gate tool calls (e.g. bash)
 
 observability:
-  enabled: false            # set true (or export LANGSMITH_TRACING=true) to send workflow traces to LangSmith
-  project: atom-workflows   # LangSmith project name (LANGSMITH_PROJECT env overrides)
+  enabled: true             # set true (or export LANGSMITH_TRACING=true) to send workflow traces to LangSmith
+  project: atom             # LangSmith project name (LANGSMITH_PROJECT env overrides)
   default_tags: []          # tags added to every workflow run
   include_prompt_fingerprint: true   # correlate a prompt version with run outcomes
   capture_git_sha: true
