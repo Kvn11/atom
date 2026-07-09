@@ -13,6 +13,7 @@ from typing import Awaitable, Callable, Optional
 
 from atom.agent import PreparedModel
 from atom.config.schema import AtomConfig
+from atom.notes import ensure_vault
 from atom.observability import apply_observability_env, build_lead_trace
 from atom.runtime import run_agent
 from atom.workflow.run_store import (
@@ -133,6 +134,21 @@ class WorkflowEngine:
             manifest.status = "running"
             self.store.save(manifest)
 
+            notes_binding = None
+            if workflow.notes.enabled:
+                try:
+                    notes_binding = ensure_vault(self.cfg.home, workflow.name, workflow.notes)
+                except Exception as exc:  # noqa: BLE001 — notes setup failure halts the run cleanly
+                    if manifest.steps and manifest.steps[0].tasks:
+                        manifest.steps[0].tasks[0].status = "failed"
+                        manifest.steps[0].tasks[0].error = (
+                            f"persistent notes setup failed: {type(exc).__name__}: {exc}")
+                        manifest.steps[0].status = "failed"
+                    manifest.status = "halted"
+                    manifest.ended_at = _now()
+                    self.store.save(manifest)
+                    return manifest
+
             sem = asyncio.Semaphore(max(1, self.cfg.workflow.max_parallel))
             for step_state, step_def in zip(manifest.steps, workflow.steps):
                 step_state.status = "running"
@@ -140,7 +156,7 @@ class WorkflowEngine:
 
                 async def run_one(ts: TaskState, td: TaskDef, sd: StepDef, ss: StepState):
                     async with sem:
-                        await self._run_task(manifest, workflow, ss, sd, ts, td)
+                        await self._run_task(manifest, workflow, ss, sd, ts, td, notes=notes_binding)
 
                 await asyncio.gather(*[
                     run_one(ts, td, step_def, step_state)
@@ -178,6 +194,7 @@ class WorkflowEngine:
     async def _run_task(
         self, manifest: RunManifest, workflow: WorkflowDef,
         step_state: StepState, step_def: StepDef, ts: TaskState, td: TaskDef,
+        notes: "object | None" = None,
     ) -> None:
         """Runs one task. Must NEVER raise: this runs concurrently with sibling tasks under
         asyncio.gather(), and one task's failure (including its own store.save() I/O errors)
@@ -209,6 +226,7 @@ class WorkflowEngine:
                 override_model=td.model, override_thinking=td.thinking,
                 workspace=manifest.workspace_path, thread_id=ts.thread_id,
                 trace=trace, prepared=prepared,
+                notes=notes.as_prompt_ctx() if notes else None,
             )
             result = await (asyncio.wait_for(coro, timeout) if timeout else coro)
             self.store.save_chat(

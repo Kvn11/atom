@@ -333,6 +333,65 @@ async def test_draft_artifact_snapshot_survives_refine_overwrite(base_config, at
 
 
 @pytest.mark.asyncio
+async def test_notes_binding_forwarded_to_run_agent(base_config, atom_home, monkeypatch):
+    from atom.notes import NotesBinding
+    from atom.runtime import RunResult
+
+    captured = {}
+
+    def fake_ensure(home, name, cfg, **k):
+        return NotesBinding(provider="logseq", root_dir="/x", graph="demo")
+
+    async def spy(prompt, **kwargs):
+        captured["notes"] = kwargs.get("notes")
+        return RunResult(thread_id=kwargs.get("thread_id", "t"), messages=[], final_text="ok", state={})
+
+    monkeypatch.setattr(engine_mod, "ensure_vault", fake_ensure)
+    monkeypatch.setattr(engine_mod, "run_agent", spy)
+
+    wf = WorkflowDef.model_validate({
+        "name": "demo", "notes": {"enabled": True},
+        "steps": [{"title": "Draft", "tasks": [{"id": "t1", "prompt": "x"}]}]})
+    engine = WorkflowEngine(base_config)
+    engine.create_run(wf, {}, "runnotesfwd", "2026-07-03T00:00:00")
+    await engine.execute("runnotesfwd")
+    assert captured["notes"] == {"provider": "logseq", "root_dir": "/x", "graph": "demo"}
+
+
+@pytest.mark.asyncio
+async def test_no_notes_forwards_none(base_config, atom_home, monkeypatch):
+    from atom.runtime import RunResult
+
+    captured = {}
+
+    async def spy(prompt, **kwargs):
+        captured["notes"] = kwargs.get("notes")
+        return RunResult(thread_id=kwargs.get("thread_id", "t"), messages=[], final_text="ok", state={})
+
+    monkeypatch.setattr(engine_mod, "run_agent", spy)
+    engine = WorkflowEngine(base_config)
+    engine.create_run(_one_task_workflow(), {}, "runnonotes", "2026-07-03T00:00:00")
+    await engine.execute("runnonotes")
+    assert captured["notes"] is None
+
+
+@pytest.mark.asyncio
+async def test_notes_setup_failure_halts_run(base_config, atom_home, monkeypatch):
+    def boom(*a, **k):
+        raise FileNotFoundError("logseq missing")
+
+    monkeypatch.setattr(engine_mod, "ensure_vault", boom)
+    wf = WorkflowDef.model_validate({
+        "name": "demo", "notes": {"enabled": True},
+        "steps": [{"title": "Draft", "tasks": [{"id": "t1", "prompt": "x"}]}]})
+    engine = WorkflowEngine(base_config)
+    engine.create_run(wf, {}, "runnotesfail", "2026-07-03T00:00:00")
+    manifest = await engine.execute("runnotesfail")
+    assert manifest.status == "halted"
+    assert "logseq missing" in (manifest.steps[0].tasks[0].error or "")
+
+
+@pytest.mark.asyncio
 async def test_task_trace_carries_session_id(base_config, atom_home, monkeypatch):
     """Each task's trace must carry its own thread id as session_id (one thread per lead agent)."""
     real = engine_mod.run_agent
