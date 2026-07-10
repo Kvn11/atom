@@ -484,3 +484,52 @@ async def test_execute_flush_failure_does_not_break_run(base_config, monkeypatch
     engine.create_run(_one_task_wf(), {"topic": "sea"}, "runH", "2026-07-09T00:00:00")
     manifest = await engine.execute("runH")   # must NOT raise despite the flush blowing up
     assert manifest.status == "complete"
+
+
+@pytest.mark.asyncio
+async def test_provider_unavailable_fails_task_and_halts_run(base_config, atom_home, monkeypatch):
+    from atom.middleware.llm_error import ProviderUnavailableError
+
+    async def boom(prompt, **kwargs):
+        raise ProviderUnavailableError(RuntimeError("503 UNAVAILABLE"), 21)
+
+    monkeypatch.setattr(engine_mod, "run_agent", boom)
+    engine = WorkflowEngine(base_config)
+    engine.create_run(_one_task_wf(), {"topic": "sea"}, "run_pu", "2026-07-10T00:00:00")
+    manifest = await engine.execute("run_pu")
+    assert manifest.status == "halted"
+    assert manifest.steps[0].tasks[0].status == "failed"
+    assert "provider unavailable" in (manifest.steps[0].tasks[0].error or "")
+
+
+@pytest.mark.asyncio
+async def test_run_task_cancelled_leaves_clean_terminal_state(base_config, atom_home, monkeypatch):
+    async def cancelled(prompt, **kwargs):
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(engine_mod, "run_agent", cancelled)
+    engine = WorkflowEngine(base_config)
+    manifest = engine.create_run(_one_task_wf(), {"topic": "sea"}, "run_cx", "2026-07-10T00:00:00")
+    workflow = engine._defs["run_cx"]
+    ss = manifest.steps[0]
+    sd = workflow.steps[0]
+    ts = ss.tasks[0]
+    td = sd.tasks[0]
+
+    with pytest.raises(asyncio.CancelledError):
+        await engine._run_task(manifest, workflow, ss, sd, ts, td)
+    assert ts.status == "failed"
+    assert ts.error == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_initial_manifest_load_failure_logs_and_reraises(base_config, atom_home, monkeypatch, caplog):
+    import logging
+
+    engine = WorkflowEngine(base_config)
+    monkeypatch.setattr(engine.store, "load",
+                        lambda rid: (_ for _ in ()).throw(OSError("disk gone")))
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(OSError):
+            await engine.execute("run_missing")
+    assert any("failed to load manifest" in r.message for r in caplog.records)

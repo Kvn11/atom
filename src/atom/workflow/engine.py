@@ -136,11 +136,15 @@ class WorkflowEngine:
                 manifest.ended_at = _now()
                 self.store.save(manifest)
         except Exception:
-            pass  # best-effort: this callback must never raise
+            logger.exception("workflow run %s: done-callback cleanup failed", run_id)
 
     # ---- execution ----
     async def execute(self, run_id: str) -> RunManifest:
-        manifest = self.store.load(run_id)
+        try:
+            manifest = self.store.load(run_id)
+        except Exception:
+            logger.exception("workflow run %s: failed to load manifest", run_id)
+            raise
         try:
             workflow = self._defs.get(run_id) or load_workflow(manifest.workflow, self.cfg.home)
             manifest.status = "running"
@@ -198,7 +202,7 @@ class WorkflowEngine:
             try:
                 self.store.save(manifest)
             except Exception:
-                pass  # best-effort
+                logger.exception("workflow run %s: failed to persist halted status", run_id)
             raise
         finally:
             self._defs.pop(run_id, None)
@@ -256,6 +260,15 @@ class WorkflowEngine:
                 manifest.run_id, step_state.index, ts.id, presented,
             )
             ts.status = "succeeded"
+        except asyncio.CancelledError:
+            ts.status = "failed"
+            ts.error = "cancelled"
+            ts.ended_at = _now()
+            try:
+                self.store.save(manifest)
+            except Exception:
+                pass  # best-effort: cancellation cleanup must not mask the cancellation
+            raise
         except asyncio.TimeoutError:
             ts.status = "failed"
             ts.error = f"task exceeded {timeout}s timeout"
