@@ -21,16 +21,36 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage, RemoveMessage
 
 _PIN_PREFIX = "[Standing instruction — the user's original request, preserved verbatim]\n\n"
+_SUMMARY_ERROR_SENTINEL = "error generating summary:"
 
 
 class PinnedSummarizationMiddleware(SummarizationMiddleware):
     """SummarizationMiddleware that re-pins ``state['pinned_instruction']`` on every compaction."""
 
     def before_model(self, state: Any, runtime: Any) -> dict[str, Any] | None:
-        return self._inject_pin(super().before_model(state, runtime), state)
+        result = super().before_model(state, runtime)
+        if self._summary_failed(result):
+            return None  # summarizer failed even after retries — keep history, retry next trigger
+        return self._inject_pin(result, state)
 
     async def abefore_model(self, state: Any, runtime: Any) -> dict[str, Any] | None:
-        return self._inject_pin(await super().abefore_model(state, runtime), state)
+        result = await super().abefore_model(state, runtime)
+        if self._summary_failed(result):
+            return None
+        return self._inject_pin(result, state)
+
+    @staticmethod
+    def _summary_failed(result: dict[str, Any] | None) -> bool:
+        # LangChain's SummarizationMiddleware swallows summarizer exceptions into the summary
+        # text "Error generating summary: ...". Detect that sentinel so we never commit a broken
+        # summary (which would RemoveMessage(ALL) and destroy history on a transient error).
+        if not result:
+            return False
+        for msg in result.get("messages", []):
+            content = getattr(msg, "content", "")
+            if isinstance(content, str) and _SUMMARY_ERROR_SENTINEL in content.lower():
+                return True
+        return False
 
     @staticmethod
     def _inject_pin(result: dict[str, Any] | None, state: Any) -> dict[str, Any] | None:

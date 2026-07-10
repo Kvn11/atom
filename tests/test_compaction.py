@@ -156,3 +156,48 @@ def test_trim_tokens_defaults_to_library_default_when_unset():
 
 def test_summary_input_tokens_config_default(base_config):
     assert base_config.compaction.summary_input_tokens == 8000
+
+
+from langchain_core.language_models import BaseChatModel
+from langchain_core.outputs import ChatResult
+
+
+class _RaisingModel(BaseChatModel):
+    """A summarizer whose every call raises a transient error (langchain will convert it to
+    the 'Error generating summary: ...' sentinel string)."""
+
+    def _generate(self, messages, stop=None, run_manager=None, **kwargs) -> ChatResult:
+        raise RuntimeError("503 UNAVAILABLE")
+
+    async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs) -> ChatResult:
+        raise RuntimeError("503 UNAVAILABLE")
+
+    @property
+    def _llm_type(self) -> str:
+        return "raising"
+
+
+def test_compaction_skips_and_keeps_history_on_summary_failure():
+    mw = build_compaction_middleware(_RaisingModel(), context_window=2, ratio=0.5, keep_messages=2)
+    out = mw.before_model(
+        {"messages": _five_messages(), "pinned_instruction": "ORIGINAL TASK"}, None
+    )
+    assert out is None                       # skipped: no RemoveMessage(ALL), history preserved
+
+
+async def test_compaction_skips_on_summary_failure_async():
+    mw = build_compaction_middleware(_RaisingModel(), context_window=2, ratio=0.5, keep_messages=2)
+    out = await mw.abefore_model(
+        {"messages": _five_messages(), "pinned_instruction": "ORIGINAL TASK"}, None
+    )
+    assert out is None
+
+
+def test_summary_failed_detects_sentinel():
+    from atom.middleware.compaction import PinnedSummarizationMiddleware
+    from langchain_core.messages import HumanMessage
+    good = {"messages": [HumanMessage(content="Here is a summary:\n\nclean summary")]}
+    bad = {"messages": [HumanMessage(content="Here is a summary:\n\nError generating summary: 503")]}
+    assert PinnedSummarizationMiddleware._summary_failed(good) is False
+    assert PinnedSummarizationMiddleware._summary_failed(bad) is True
+    assert PinnedSummarizationMiddleware._summary_failed(None) is False
