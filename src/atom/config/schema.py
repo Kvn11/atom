@@ -61,6 +61,15 @@ class WorkflowConfig(_Base):
     task_timeout_seconds: int = 1800
 
 
+class RetryConfig(_Base):
+    # Transient-provider-error retry for every model call (lead + sub-agents + summarizer).
+    # 20 attempts with full-jitter exponential backoff, then the task fails.
+    max_retries: int = 20
+    base_delay: float = 1.0     # seconds; first backoff
+    max_delay: float = 30.0     # seconds; per-attempt cap
+    jitter: bool = True         # full jitter on every delay
+
+
 class GuardrailConfig(_Base):
     enabled: bool = False
 
@@ -118,6 +127,7 @@ class AtomConfig(_Base):
     compaction: CompactionConfig = Field(default_factory=CompactionConfig)
     library: LibraryConfig = Field(default_factory=LibraryConfig)
     workflow: WorkflowConfig = Field(default_factory=WorkflowConfig)
+    retry: RetryConfig = Field(default_factory=RetryConfig)
     guardrails: GuardrailConfig = Field(default_factory=GuardrailConfig)
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
     track_usage: bool = True

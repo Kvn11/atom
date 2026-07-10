@@ -61,6 +61,7 @@ class SubagentRunner:
     recursion_limit: int = 300  # max LangGraph super-steps per child run (~N/11 agent turns)
     base_trace: dict | None = None       # enriched lead trace; None -> sub-agent runs untraced
     observability: Any = None            # ObservabilityConfig | None
+    retry: Any = None                    # RetryPolicy | None; wired in Task 3 (child model retry/backoff)
     skill_catalog: list = field(default_factory=list)  # [{"name","description"}] always-on catalog
     has_skill_library: bool = False      # a skill_library/ exists -> bind search_skills
 

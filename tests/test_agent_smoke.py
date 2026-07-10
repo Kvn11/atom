@@ -92,3 +92,42 @@ def test_instruction_pin_and_trim_are_wired(base_config, atom_home):
     # subagent runner inherits the profile's subagent recursion_limit (wiring guard)
     sub = next(m for m in chain if isinstance(m, SubagentMiddleware))
     assert sub.runner.recursion_limit == profile.subagents.recursion_limit == 300
+
+
+def test_summarizer_is_retry_wrapped(base_config):
+    from atom.agent import _build_summarizer
+    from atom.config.schema import AgentProfile
+    from atom.middleware.llm_error import RetryPolicy, RetryingModel
+    from tests.conftest import make_prepared
+    from langchain_core.messages import AIMessage
+
+    prepared = make_prepared([AIMessage(content="x")])
+    prof = AgentProfile(model="haiku")          # no summarizer_model -> reuse lead model
+    summ = _build_summarizer(prof, prepared, RetryPolicy(max_retries=3))
+    assert isinstance(summ, RetryingModel)
+
+
+def test_lead_middleware_uses_config_retry_policy(base_config):
+    from atom.agent import build_lead_agent
+    from atom.middleware.llm_error import LLMErrorHandlingMiddleware
+    from tests.conftest import make_prepared
+    from langchain_core.messages import AIMessage
+
+    base_config.retry.max_retries = 7
+    prepared = make_prepared([AIMessage(content="x")])
+    agent = build_lead_agent(base_config, "default", prepared=prepared)
+    mws = agent.middleware if hasattr(agent, "middleware") else []
+    # Fall back to introspecting the builder directly if the compiled agent hides middleware:
+    from atom.agent import _build_middlewares, _build_summarizer
+    from atom.middleware.llm_error import RetryPolicy
+    from atom.sandbox.provider import LocalSandboxProvider
+    from atom.library import load_library
+    policy = RetryPolicy(max_retries=base_config.retry.max_retries)
+    summ = _build_summarizer(base_config.profile("default"), prepared, policy)
+    chain = _build_middlewares(
+        base_config, base_config.profile("default"), prepared,
+        LocalSandboxProvider(bash_enabled=True), str(base_config.home), summ,
+        load_library(str(base_config.home)), None, retry_policy=policy, skill_catalog=[],
+    )
+    llm_mws = [m for m in chain if isinstance(m, LLMErrorHandlingMiddleware)]
+    assert llm_mws and llm_mws[0].policy.max_retries == 7

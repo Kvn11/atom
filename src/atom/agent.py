@@ -104,6 +104,13 @@ def build_lead_agent(
 
     profile_name = profile_name or cfg.defaults.agent
     profile = cfg.profile(profile_name)
+
+    from atom.middleware.llm_error import RetryPolicy
+    retry_policy = RetryPolicy(
+        max_retries=cfg.retry.max_retries, base_delay=cfg.retry.base_delay,
+        max_delay=cfg.retry.max_delay, jitter=cfg.retry.jitter,
+    )
+
     prepared = prepared or prepare_model(profile, override_model, override_thinking)
 
     home = str(atom_home(cfg.home))
@@ -144,7 +151,7 @@ def build_lead_agent(
         extras.append("load_skill")
     tool_names = effective + [e for e in extras if e not in effective]
 
-    summarizer = _build_summarizer(profile, prepared)
+    summarizer = _build_summarizer(profile, prepared, retry_policy)
     system_prompt = render_lead_system_prompt(
         cfg, profile, profile_name, prepared.caps,
         frequent_tool_names=tool_names,
@@ -167,7 +174,7 @@ def build_lead_agent(
         mw_trace = trace
     middleware = _build_middlewares(
         cfg, profile, prepared, provider, home, summarizer, library, mw_trace,
-        skill_catalog=skill_catalog,
+        skill_catalog=skill_catalog, retry_policy=retry_policy,
     )
 
     return create_agent(
@@ -181,11 +188,12 @@ def build_lead_agent(
     )
 
 
-def _build_summarizer(profile: AgentProfile, prepared: PreparedModel) -> BaseChatModel:
-    """Cheap model for compaction + title; reuse the lead model if none configured."""
-    if profile.summarizer_model:
-        return build_model(profile.summarizer_model, thinking="off")
-    return prepared.model
+def _build_summarizer(profile: AgentProfile, prepared: PreparedModel, policy) -> BaseChatModel:
+    """Cheap model for compaction + title, wrapped so its out-of-band calls get retry/backoff."""
+    from atom.middleware.llm_error import RetryingModel
+
+    base = build_model(profile.summarizer_model, thinking="off") if profile.summarizer_model else prepared.model
+    return RetryingModel(base, policy)
 
 
 def _build_middlewares(
@@ -199,6 +207,7 @@ def _build_middlewares(
     trace: dict | None = None,
     *,
     skill_catalog: list[dict] | None = None,
+    retry_policy=None,
 ) -> list[AgentMiddleware]:
     # Local imports keep the ordered list readable and avoid import cycles.
     from atom.middleware.clarification import ClarificationMiddleware
@@ -226,6 +235,8 @@ def _build_middlewares(
     # The [2,4] clamp (deviation #9) is applied once here and used for both the runner's semaphore
     # and the fan-out limit middleware, so config's max_concurrent can never breach the band.
     max_sub = clamp_concurrency(profile.subagents.max_concurrent)
+    from atom.middleware.llm_error import RetryPolicy
+    policy = retry_policy or RetryPolicy()
     from atom.prompts.render import resolve_prompt_ref
 
     # Resolve the summary prompt without Jinja rendering, so the literal "{messages}" placeholder
@@ -249,6 +260,7 @@ def _build_middlewares(
         recursion_limit=profile.subagents.recursion_limit,
         base_trace=trace,
         observability=cfg.observability,
+        retry=policy,
         skill_catalog=skill_catalog or [],
         has_skill_library=library.has_skills,
     )
@@ -271,7 +283,7 @@ def _build_middlewares(
             trim_tokens=cfg.compaction.summary_input_tokens,
         ),
         # --- wrap_model_call (outer -> inner by position) ---
-        LLMErrorHandlingMiddleware(),                    # 5. outermost: retry/normalize provider errors
+        LLMErrorHandlingMiddleware(policy),               # 5. outermost: retry, then raise on exhaustion
         SkillActivationMiddleware(home=home),            # 6. inject /skill-name body (transient)
     ]
     if library.has_skills or skill_catalog:
