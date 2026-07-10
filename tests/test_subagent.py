@@ -225,3 +225,26 @@ async def test_subagent_no_base_trace_is_untraced(base_config):
     await runner.run("p1", "d", "go", "general-purpose")
     cfg = captured["config"]
     assert "metadata" not in cfg and "tags" not in cfg  # CLI-style: nothing attached
+
+
+def test_child_middleware_includes_llm_error_retry(atom_home):
+    from atom.middleware.llm_error import LLMErrorHandlingMiddleware, RetryPolicy
+    from atom.subagent import SubagentRunner
+
+    runner = SubagentRunner(
+        model=None, home=str(atom_home), context_window=100_000, bash_enabled=False,
+        retry=RetryPolicy(max_retries=9),
+    )
+    mws = runner._child_middleware()
+    llm = [m for m in mws if isinstance(m, LLMErrorHandlingMiddleware)]
+    assert llm and llm[0].policy.max_retries == 9
+
+
+def test_child_middleware_retry_defaults_when_unset(atom_home):
+    from atom.middleware.llm_error import LLMErrorHandlingMiddleware
+    from atom.subagent import SubagentRunner
+
+    runner = SubagentRunner(model=None, home=str(atom_home), context_window=100_000,
+                            bash_enabled=False)  # retry unset -> default policy
+    llm = [m for m in runner._child_middleware() if isinstance(m, LLMErrorHandlingMiddleware)]
+    assert llm and llm[0].policy.max_retries == 20

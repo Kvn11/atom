@@ -87,10 +87,12 @@ class SubagentRunner:
         return tools
 
     def _child_middleware(self) -> list:
-        """Pin the delegated prompt and add minimal resilience (compaction, dangling-call repair,
-        tool-error, loop detection) so long-running children survive context overflow and loops."""
+        """Pin the delegated prompt and add resilience (retry, compaction, dangling-call repair,
+        tool-error, loop detection) so long-running children survive transient provider errors,
+        context overflow, and loops."""
         from atom.middleware.dangling_tool_call import DanglingToolCallMiddleware
         from atom.middleware.instruction_pin import InstructionPinMiddleware
+        from atom.middleware.llm_error import LLMErrorHandlingMiddleware, RetryPolicy
         from atom.middleware.loop_detection import LoopDetectionMiddleware
         from atom.middleware.tool_error import ToolErrorHandlingMiddleware
 
@@ -112,7 +114,11 @@ class SubagentRunner:
             from atom.middleware.skill_library import SkillLibraryMiddleware
 
             mw.append(SkillLibraryMiddleware(self.home))
-        mw += [ToolErrorHandlingMiddleware(), LoopDetectionMiddleware()]
+        mw += [
+            LLMErrorHandlingMiddleware(self.retry or RetryPolicy()),  # retry, then raise on exhaustion
+            ToolErrorHandlingMiddleware(),
+            LoopDetectionMiddleware(),
+        ]
         return mw
 
     def _child_system(self, subagent_type: SubagentType) -> str:
