@@ -9,16 +9,18 @@ from pathlib import Path
 
 import typer
 from langchain_core.messages import AIMessage, ToolMessage
+from pydantic import ValidationError
 from rich.console import Console
 
 from atom.config import load_config
+from atom.middleware.llm_error import ProviderUnavailableError
 from atom.runtime import RunResult, run_agent
 from atom.sandbox.paths import atom_home
 
 # Cosmetic: silence a benign pydantic<->langgraph serializer warning about the typed context.
 warnings.filterwarnings("ignore", message="Pydantic serializer warnings")
 
-app = typer.Typer(add_completion=False, help="atom — a DeerFlow-style agentic harness.")
+app = typer.Typer(add_completion=False, help="atom — an agentic harness.")
 console = Console()
 
 
@@ -59,12 +61,16 @@ def run(
 ) -> None:
     """Run the agent once on TASK."""
     _load_env()
-    with console.status("[bold]thinking…[/bold]"):
-        result = asyncio.run(run_agent(
-            task, config_path=config, profile=profile, override_model=model,
-            override_thinking=thinking, override_system_prompt=system_prompt,
-            workspace=workspace, thread_id=thread, user_id=user,
-        ))
+    try:
+        with console.status("[bold]thinking…[/bold]"):
+            result = asyncio.run(run_agent(
+                task, config_path=config, profile=profile, override_model=model,
+                override_thinking=thinking, override_system_prompt=system_prompt,
+                workspace=workspace, thread_id=thread, user_id=user,
+            ))
+    except (ProviderUnavailableError, ValidationError, KeyError, FileNotFoundError) as e:
+        console.print(f"[red]Error: {type(e).__name__}: {e}[/red]")
+        raise typer.Exit(1)
     _print_activity(result)
     console.print()
     if result.awaiting_clarification:
@@ -99,14 +105,18 @@ def chat(
             break
         if not task:
             continue
-        with console.status("[bold]thinking…[/bold]"):
-            result = asyncio.run(run_agent(
-                task, config_path=config, profile=profile, override_model=model,
-                override_thinking=thinking, override_system_prompt=system_prompt,
-                # Keep the ORIGINAL workspace across turns: pinning the thread already reuses a
-                # 'new' per-thread dir, and an 'existing' bind MUST persist (don't reset to 'new').
-                workspace=workspace, thread_id=tid, user_id=user,
-            ))
+        try:
+            with console.status("[bold]thinking…[/bold]"):
+                result = asyncio.run(run_agent(
+                    task, config_path=config, profile=profile, override_model=model,
+                    override_thinking=thinking, override_system_prompt=system_prompt,
+                    # Keep the ORIGINAL workspace across turns: pinning the thread already reuses a
+                    # 'new' per-thread dir, and an 'existing' bind MUST persist (don't reset to 'new').
+                    workspace=workspace, thread_id=tid, user_id=user,
+                ))
+        except (ProviderUnavailableError, ValidationError, KeyError, FileNotFoundError) as e:
+            console.print(f"[red]Error: {type(e).__name__}: {e}[/red]")
+            continue
         tid = result.thread_id           # pin the thread for the rest of the session
         console.print(f"[bold green]atom ›[/bold green] {result.final_text}\n")
 

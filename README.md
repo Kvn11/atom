@@ -1,6 +1,6 @@
 # atom
 
-A DeerFlow-style **agentic middleware harness** built on LangChain v1. A single lead agent is
+An **agentic middleware harness** built on LangChain v1. A single lead agent is
 constructed with `langchain.agents.create_agent`, and every cross-cutting concern (workspace,
 compaction, planning, subagents, tool/skill libraries, clarification, …) is a small, ordered
 `AgentMiddleware`. atom is designed to be the reusable foundation for AI projects: models,

@@ -62,3 +62,42 @@ def test_prepare_model_applies_thinking_override(monkeypatch):
     prof = AgentProfile(model="haiku", thinking="low")
     agent_mod.prepare_model(prof, override_thinking="high")
     assert captured["thinking"] == "high"  # override wins over profile.thinking
+
+
+def test_run_reports_provider_unavailable_cleanly(monkeypatch):
+    from atom.middleware.llm_error import ProviderUnavailableError
+
+    async def boom(task, **kw):
+        raise ProviderUnavailableError(RuntimeError("503 UNAVAILABLE"), 21)
+
+    monkeypatch.setattr(cli, "run_agent", boom)
+    from typer.testing import CliRunner
+
+    result = CliRunner().invoke(cli.app, ["run", "do it"])
+    assert result.exit_code == 1
+    assert "Error" in result.output
+
+
+def test_chat_survives_provider_error_and_continues(monkeypatch):
+    from atom.middleware.llm_error import ProviderUnavailableError
+
+    seen = []
+
+    async def flaky(task, **kw):
+        seen.append(task)
+        if task == "one":
+            raise ProviderUnavailableError(RuntimeError("503"), 21)
+        return RunResult(thread_id="T", messages=[], final_text="ok", state={})
+
+    monkeypatch.setattr(cli, "run_agent", flaky)
+    inputs = iter(["one", "two", "exit"])
+    monkeypatch.setattr(cli.console, "input", lambda *a, **k: next(inputs))
+    from typer.testing import CliRunner
+
+    result = CliRunner().invoke(cli.app, ["chat"])
+    assert result.exit_code == 0, result.output
+    assert seen == ["one", "two"]        # REPL survived the error on turn 1
+
+
+def test_app_help_has_no_deerflow():
+    assert "DeerFlow" not in (cli.app.info.help or "")
