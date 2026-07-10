@@ -65,3 +65,39 @@ def test_build_model_uses_chatqwen_for_qwen_and_init_for_others(monkeypatch):
 
     build_model("haiku", thinking="off")
     assert calls["init"][0] == "anthropic:claude-haiku-4-5"
+
+
+def test_build_model_disables_sdk_retry_and_sets_timeout(monkeypatch):
+    calls: dict = {}
+
+    def fake_init(init_str, **kw):
+        calls["init"] = kw
+        return "MODEL"
+
+    class FakeQwen:
+        def __init__(self, **kw):
+            calls["qwen"] = kw
+
+    import langchain.chat_models
+    import langchain_qwq
+
+    monkeypatch.setattr(langchain.chat_models, "init_chat_model", fake_init)
+    monkeypatch.setattr(langchain_qwq, "ChatQwen", FakeQwen)
+
+    build_model("haiku", thinking="off")
+    assert calls["init"]["max_retries"] == 1          # SDK retry disabled -> middleware is the authority
+    assert calls["init"]["timeout"] == 120.0          # per-call backstop
+
+    build_model("qwen-max", thinking="off")
+    assert calls["qwen"]["max_retries"] == 1
+    assert calls["qwen"]["timeout"] == 120.0
+
+
+def test_build_model_respects_explicit_overrides(monkeypatch):
+    calls: dict = {}
+    monkeypatch.setattr(
+        __import__("langchain.chat_models", fromlist=["init_chat_model"]),
+        "init_chat_model", lambda s, **kw: calls.setdefault("init", kw),
+    )
+    build_model("haiku", thinking="off", max_retries=3, timeout=42.0)
+    assert calls["init"]["max_retries"] == 3 and calls["init"]["timeout"] == 42.0

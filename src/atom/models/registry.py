@@ -18,6 +18,7 @@ Provider = Literal["anthropic", "openai", "google_genai", "qwen"]
 
 DASHSCOPE_INTL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
 _DEFAULT_WINDOW = 128_000  # last-resort fallback for unknown "provider:model" strings
+DEFAULT_REQUEST_TIMEOUT_SECONDS = 120.0  # per-call backstop; middleware owns retry/backoff
 
 
 @dataclass(frozen=True)
@@ -154,9 +155,16 @@ def _thinking_overrides(spec: ModelSpec, thinking: Any) -> dict[str, Any]:
 
 
 def build_model(key: str, *, thinking: Any = None, **overrides: Any) -> BaseChatModel:
-    """Construct a chat model for a registry key (or raw ``provider:model`` string)."""
+    """Construct a chat model for a registry key (or raw ``provider:model`` string).
+
+    ``max_retries`` is forced to 1 so the provider SDK's own retry layer is disabled and
+    ``LLMErrorHandlingMiddleware`` is the single, predictable retry authority across providers
+    (Gemini's SDK default is 6). A per-call ``timeout`` backstops a stalled connection.
+    """
     spec = resolve_spec(key)
     kwargs = {**_thinking_overrides(spec, thinking), **overrides}
+    kwargs.setdefault("max_retries", 1)
+    kwargs.setdefault("timeout", DEFAULT_REQUEST_TIMEOUT_SECONDS)
     if spec.init_str is not None:
         from langchain.chat_models import init_chat_model
 
