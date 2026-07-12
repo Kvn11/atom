@@ -158,6 +158,76 @@ class WorkflowEngine:
                         t.started_at = None
                 step.status = compute_step_status([t.status for t in step.tasks])
 
+    # ---- worker (drainer) ----
+    def start_worker(self) -> "asyncio.Task":
+        """Start the background drain loop on the current event loop. Idempotent-ish: assumes
+        the caller holds the lease (see the API lifespan / CLI await_run)."""
+        self._stopping = False
+        self._worker_loop_task = asyncio.create_task(self.run_worker())
+        return self._worker_loop_task
+
+    async def stop_worker(self) -> None:
+        """Stop draining and cancel any in-flight runs (each execute() requeues itself on
+        cancellation, so nothing is lost)."""
+        self._stopping = True
+        self._wake.set()
+        if self._worker_loop_task is not None:
+            self._worker_loop_task.cancel()
+            await asyncio.gather(self._worker_loop_task, return_exceptions=True)
+            self._worker_loop_task = None
+        for t in list(self._worker_tasks):
+            t.cancel()
+        if self._worker_tasks:
+            await asyncio.gather(*list(self._worker_tasks), return_exceptions=True)
+        self._worker_tasks.clear()
+        self._inflight.clear()
+
+    async def run_worker(self) -> None:
+        poll = float(self.cfg.queue.poll_interval_seconds)
+        sem = asyncio.Semaphore(max(1, self.cfg.queue.max_concurrent_runs))
+        while not self._stopping:
+            # Supervisor: a scan/scheduling error in one iteration must NOT kill the drainer
+            # (that would silently stop draining until the next restart). Log and continue.
+            try:
+                self._wake.clear()
+                for run_id in self.store.queued_run_ids():
+                    if self._stopping:
+                        break
+                    if run_id in self._inflight:
+                        continue
+                    await sem.acquire()             # blocks when at capacity
+                    if self._stopping:
+                        sem.release()
+                        break
+                    self._inflight.add(run_id)
+                    t = asyncio.create_task(self._drain_one(run_id, sem))
+                    self._worker_tasks.add(t)
+                    t.add_done_callback(self._worker_tasks.discard)
+                if self._stopping:
+                    break
+                try:
+                    await asyncio.wait_for(self._wake.wait(), timeout=poll)
+                except asyncio.TimeoutError:
+                    pass
+            except asyncio.CancelledError:
+                raise                               # shutdown -> propagate, never swallow
+            except Exception:  # noqa: BLE001 — a scan/scheduling error must not kill the drainer
+                logger.exception("worker: drain loop iteration failed; continuing")
+                await asyncio.sleep(poll)           # back off to avoid a hot error loop
+
+    async def _drain_one(self, run_id: str, sem: "asyncio.Semaphore") -> None:
+        try:
+            await self.execute(run_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 — execute() already terminalizes; this is belt-and-suspenders
+            logger.exception("worker: run %s crashed in execute()", run_id)
+        finally:
+            self._inflight.discard(run_id)
+            sem.release()
+            if not self._stopping:
+                self._wake.set()                    # a slot freed -> rescan for more work
+
     def launch(self, run_id: str):
         """Schedule execute() on the event loop (default asyncio.create_task).
 

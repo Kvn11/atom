@@ -136,3 +136,97 @@ async def test_execute_cancelled_requeues_run_not_halted(base_config, atom_home,
 
     # requeued for step-level resume next start, NOT halted
     assert engine.store.load("cx1").status == "queued"
+
+
+@pytest.mark.asyncio
+async def test_worker_serializes_runs_at_concurrency_one(base_config, atom_home, monkeypatch):
+    from atom.runtime import RunResult
+    live = {"n": 0, "max": 0}
+
+    async def spy(prompt, **kwargs):
+        live["n"] += 1
+        live["max"] = max(live["max"], live["n"])
+        await asyncio.sleep(0.05)
+        live["n"] -= 1
+        return RunResult(thread_id=kwargs.get("thread_id", "t"), messages=[], final_text="ok", state={})
+
+    monkeypatch.setattr(engine_mod, "run_agent", spy)
+    base_config.queue.max_concurrent_runs = 1
+    engine = WorkflowEngine(base_config)
+    for rid in ("w1", "w2", "w3"):
+        engine.create_run(_one_task_wf(), {}, rid, "2026-07-12T00:00:00")
+        engine.enqueue(rid)
+
+    engine.start_worker()
+    for _ in range(200):                       # wait until all drained
+        if all(engine.store.load(r).status == "complete" for r in ("w1", "w2", "w3")):
+            break
+        await asyncio.sleep(0.02)
+    await engine.stop_worker()
+
+    assert live["max"] == 1                     # never two runs at once at concurrency 1
+    assert all(engine.store.load(r).status == "complete" for r in ("w1", "w2", "w3"))
+
+
+@pytest.mark.asyncio
+async def test_worker_allows_two_at_concurrency_two(base_config, atom_home, monkeypatch):
+    from atom.runtime import RunResult
+    live = {"n": 0, "max": 0}
+
+    async def spy(prompt, **kwargs):
+        live["n"] += 1
+        live["max"] = max(live["max"], live["n"])
+        await asyncio.sleep(0.05)
+        live["n"] -= 1
+        return RunResult(thread_id=kwargs.get("thread_id", "t"), messages=[], final_text="ok", state={})
+
+    monkeypatch.setattr(engine_mod, "run_agent", spy)
+    base_config.queue.max_concurrent_runs = 2
+    engine = WorkflowEngine(base_config)
+    for rid in ("p1", "p2", "p3"):
+        engine.create_run(_one_task_wf(), {}, rid, "2026-07-12T00:00:00")
+        engine.enqueue(rid)
+
+    engine.start_worker()
+    for _ in range(200):
+        if all(engine.store.load(r).status == "complete" for r in ("p1", "p2", "p3")):
+            break
+        await asyncio.sleep(0.02)
+    await engine.stop_worker()
+
+    assert live["max"] == 2                     # exactly two in flight, never three
+
+
+@pytest.mark.asyncio
+async def test_worker_survives_transient_scan_error(base_config, atom_home, monkeypatch):
+    from atom.runtime import RunResult
+
+    async def spy(prompt, **kwargs):
+        return RunResult(thread_id=kwargs.get("thread_id", "t"), messages=[], final_text="ok", state={})
+
+    monkeypatch.setattr(engine_mod, "run_agent", spy)
+    base_config.queue.poll_interval_seconds = 0.05     # fast back-off retry for the test
+    engine = WorkflowEngine(base_config)
+    engine.create_run(_one_task_wf(), {}, "sv1", "2026-07-12T00:00:00")
+    engine.enqueue("sv1")
+
+    calls = {"n": 0}
+    real_scan = engine.store.queued_run_ids
+
+    def flaky_scan():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise OSError("transient scan failure")     # first iteration blows up
+        return real_scan()
+
+    monkeypatch.setattr(engine.store, "queued_run_ids", flaky_scan)
+
+    engine.start_worker()
+    for _ in range(200):
+        if engine.store.load("sv1").status == "complete":
+            break
+        await asyncio.sleep(0.02)
+    await engine.stop_worker()
+
+    assert calls["n"] >= 2                              # the loop retried after the error
+    assert engine.store.load("sv1").status == "complete"   # worker recovered and drained
