@@ -95,7 +95,7 @@ step-level resume in the engine. The centerpiece is the `WorkflowEngine` growing
                          status → complete | halted
 
    startup (FastAPI lifespan):  recover()  ──►  running→queued, queued stays  ──►  start run_worker()
-   shutdown:                    cancel worker (in-flight → halted) ; release lease
+   shutdown:                    cancel worker (execute() requeues in-flight → queued) ; release lease
 ```
 
 ## Components
@@ -259,16 +259,18 @@ async def lifespan(app):
         engine.start_worker()          # asyncio.create_task(engine.run_worker())
     yield
     if holds:
-        await engine.stop_worker()     # cancel task; in-flight run → halted via CancelledError
+        await engine.stop_worker()     # cancel task; execute() requeues in-flight run → queued
         engine.lease.release()
 ```
 
 A second server on the same `$ATOM_HOME` fails to acquire the lease, so it skips recovery and the
 worker and serves read/enqueue only — no double-drain.
 
-`serve` (`cli.py:298`) is unchanged — `uvicorn.run` drives the lifespan. On shutdown, the
-in-flight run's existing `except asyncio.CancelledError` path (`engine.py:263`) marks it
-`halted`; boot recovery re-queues it on the next start.
+`serve` (`cli.py:298`) is unchanged — `uvicorn.run` drives the lifespan. On shutdown, `stop_worker`
+cancels the in-flight run; `execute()` gains an explicit `except asyncio.CancelledError` branch
+that sets the run **back to `queued`** (not `halted` — that is terminal and would strand it), so
+the next startup resumes it at step granularity. A hard crash (no chance to run that branch)
+leaves the run `running`, which boot recovery re-queues instead.
 
 ### 6.9 API `submit_run` change
 
