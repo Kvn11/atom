@@ -133,8 +133,13 @@ class WorkflowEngine:
             except Exception:  # noqa: BLE001 — a corrupt manifest must not block recovery
                 logger.exception("recover: failed to load run %s; skipping", run_id)
                 continue
-            if m.status in ("complete", "halted", "queued"):
+            if m.status in ("complete", "halted"):
                 continue
+            # NOTE: a "queued" run is intentionally NOT skipped here. RunStore.save() writes
+            # run.json then summary.json as two separate atomic replaces; a crash between them
+            # during enqueue() leaves run.json=queued but summary.json stale (pending/running).
+            # The interrupted scan (summary-based) surfaces such a run; re-saving it below
+            # re-syncs the summary so the worker's queued scan can see it (else it strands).
             self._reset_interrupted_step(m)
             m.status = "queued"
             if m.enqueued_at is None:
@@ -156,6 +161,8 @@ class WorkflowEngine:
     def start_worker(self) -> "asyncio.Task":
         """Start the background drain loop on the current event loop. Idempotent-ish: assumes
         the caller holds the lease (see the API lifespan / CLI await_run)."""
+        if self._worker_loop_task is not None and not self._worker_loop_task.done():
+            return self._worker_loop_task
         self._stopping = False
         self._worker_loop_task = asyncio.create_task(self.run_worker())
         return self._worker_loop_task
@@ -222,7 +229,7 @@ class WorkflowEngine:
             if not self._stopping:
                 self._wake.set()                    # a slot freed -> rescan for more work
 
-    async def await_run(self, run_id: str) -> "RunManifest":
+    async def await_run(self, run_id: str) -> RunManifest:
         """Block until run_id is terminal. If no drainer holds the lease, become it and execute
         THIS run (step-level resume), then release; otherwise poll while another process drains,
         retrying the lease so a dead drainer is taken over. Never runs another user's run."""
@@ -310,10 +317,10 @@ class WorkflowEngine:
             raise
         except BaseException:
             # Belt-and-suspenders: _run_task never raises (it guards its own failures), but
-            # this also covers the load_workflow fallback above, a save() I/O error, and
-            # asyncio.CancelledError (e.g. server shutdown) — none of those may leave the run
-            # non-terminal. Note: except BaseException (not Exception) so CancelledError is
-            # covered too; we still re-raise so cancellation/real errors keep propagating.
+            # this also covers the load_workflow fallback above, a save() I/O error, and any
+            # other real error — none of those may leave the run non-terminal. CancelledError
+            # is handled by the earlier except-clause, not here; we still re-raise so real
+            # errors keep propagating.
             manifest.status = "halted"
             manifest.ended_at = _now()
             try:

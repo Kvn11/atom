@@ -232,6 +232,23 @@ async def test_worker_survives_transient_scan_error(base_config, atom_home, monk
     assert engine.store.load("sv1").status == "complete"   # worker recovered and drained
 
 
+def test_recover_resyncs_torn_enqueue_so_run_is_not_stranded(base_config, atom_home):
+    # Simulate a crash BETWEEN RunStore.save()'s two atomic writes during enqueue:
+    # run.json=queued but summary.json still stale (=pending). Because the queue scan reads the
+    # summary cache, such a run is invisible to the worker unless recover() re-syncs it.
+    engine = WorkflowEngine(base_config)
+    engine.create_run(_one_task_wf(), {}, "torn1", "2026-07-12T00:00:00")  # both files = pending
+    m = engine.store.load("torn1")
+    m.status = "queued"
+    m.enqueued_at = "2026-07-12T00:00:01.000000"
+    # write ONLY run.json (bypassing save(), which would also refresh summary.json)
+    engine.store._manifest_path("torn1").write_text(m.model_dump_json(indent=2), encoding="utf-8")
+
+    assert engine.store.queued_run_ids() == []          # stranded: summary cache still says pending
+    engine.recover()                                    # must re-sync, not skip
+    assert engine.store.queued_run_ids() == ["torn1"]   # un-stranded: worker can now drain it
+
+
 @pytest.mark.asyncio
 async def test_await_run_drains_own_run_when_lease_free(base_config, atom_home, monkeypatch):
     from atom.runtime import RunResult

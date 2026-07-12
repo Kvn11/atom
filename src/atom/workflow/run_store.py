@@ -46,7 +46,7 @@ class RunManifest(BaseModel):
     run_id: str
     workflow: str
     inputs: dict[str, Any] = Field(default_factory=dict)
-    status: str = "pending"            # pending | running | complete | halted
+    status: str = "pending"            # pending | queued | running | complete | halted
     created_at: str
     enqueued_at: Optional[str] = None  # microsecond-precision; primary FIFO sort key
     ended_at: Optional[str] = None

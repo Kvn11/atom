@@ -36,10 +36,10 @@ def create_app(cfg: AtomConfig | None = None, engine: WorkflowEngine | None = No
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         holds = engine.lease.acquire()          # lease first: recover + drain only if we own it
-        if holds:
-            engine.recover()
-            engine.start_worker()
         try:
+            if holds:
+                engine.recover()
+                engine.start_worker()
             yield
         finally:
             if holds:
