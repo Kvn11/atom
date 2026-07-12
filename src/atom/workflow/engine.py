@@ -218,6 +218,8 @@ class WorkflowEngine:
 
             sem = asyncio.Semaphore(max(1, self.cfg.workflow.max_parallel))
             for step_state, step_def in zip(manifest.steps, workflow.steps):
+                if step_state.status == "complete":
+                    continue                       # resume: this step finished in a prior life
                 step_state.status = "running"
                 self.store.save(manifest)
 
@@ -225,9 +227,12 @@ class WorkflowEngine:
                     async with sem:
                         await self._run_task(manifest, workflow, ss, sd, ts, td, notes=notes_binding)
 
+                pending = [
+                    (ts, td) for ts, td in zip(step_state.tasks, step_def.tasks)
+                    if ts.status != "succeeded"    # resume: skip tasks already completed
+                ]
                 await asyncio.gather(*[
-                    run_one(ts, td, step_def, step_state)
-                    for ts, td in zip(step_state.tasks, step_def.tasks)
+                    run_one(ts, td, step_def, step_state) for ts, td in pending
                 ], return_exceptions=True)
 
                 step_state.status = compute_step_status([t.status for t in step_state.tasks])
@@ -242,6 +247,15 @@ class WorkflowEngine:
             manifest.ended_at = _now()
             self.store.save(manifest)
             return manifest
+        except asyncio.CancelledError:
+            # Worker stop / Ctrl-C: put the run back on the queue so the next startup resumes it
+            # (step-level). Do NOT mark it halted — halted is terminal and would strand the run.
+            manifest.status = "queued"
+            try:
+                self.store.save(manifest)
+            except Exception:  # noqa: BLE001
+                logger.exception("workflow run %s: failed to requeue on cancel", run_id)
+            raise
         except BaseException:
             # Belt-and-suspenders: _run_task never raises (it guards its own failures), but
             # this also covers the load_workflow fallback above, a save() I/O error, and
