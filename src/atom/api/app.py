@@ -7,6 +7,7 @@ from __future__ import annotations
 import datetime
 import mimetypes
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
@@ -31,7 +32,21 @@ def create_app(cfg: AtomConfig | None = None, engine: WorkflowEngine | None = No
     cfg = cfg or load_config()
     engine = engine or WorkflowEngine(cfg)
     store = engine.store
-    app = FastAPI(title="atom workflows")
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        holds = engine.lease.acquire()          # lease first: recover + drain only if we own it
+        if holds:
+            engine.recover()
+            engine.start_worker()
+        try:
+            yield
+        finally:
+            if holds:
+                await engine.stop_worker()
+                engine.lease.release()
+
+    app = FastAPI(title="atom workflows", lifespan=lifespan)
     app.add_middleware(
         CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
     )
@@ -53,8 +68,6 @@ def create_app(cfg: AtomConfig | None = None, engine: WorkflowEngine | None = No
 
     @app.post("/api/runs", status_code=202)
     async def submit_run(req: RunRequest) -> dict:
-        # MUST be async: engine.launch() calls asyncio.create_task, which needs the running
-        # event loop. A sync endpoint would run in a threadpool with no loop and raise.
         try:
             wf = load_workflow(req.workflow, cfg.home)
         except FileNotFoundError:
@@ -64,8 +77,8 @@ def create_app(cfg: AtomConfig | None = None, engine: WorkflowEngine | None = No
             engine.create_run(wf, req.inputs, run_id, _now())
         except MissingInputError as exc:
             raise HTTPException(422, str(exc))
-        engine.launch(run_id)
-        return {"run_id": run_id, "status": "pending"}
+        engine.enqueue(run_id)
+        return {"run_id": run_id, "status": "queued"}
 
     @app.get("/api/runs")
     def get_runs(status: str = "all", limit: int = 50, offset: int = 0) -> dict:

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -12,6 +13,14 @@ from atom.workflow.engine import WorkflowEngine
 from tests.conftest import make_prepared
 
 WS = "/mnt/user-data/workspace"
+
+
+@asynccontextmanager
+async def _client(app):
+    # Drive the FastAPI lifespan so the queue worker starts/stops (ASGITransport alone does not).
+    async with app.router.lifespan_context(app):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+            yield c
 
 
 def _seed(home):
@@ -48,11 +57,24 @@ async def _poll(client, run_id, tries=100):
 
 
 @pytest.mark.asyncio
+async def test_submit_returns_queued_then_worker_drains(base_config, atom_home):
+    _seed(atom_home)
+    engine = WorkflowEngine(base_config, prepared_provider=_provider)
+    app = create_app(base_config, engine=engine)
+    async with _client(app) as client:
+        r = await client.post("/api/runs", json={"workflow": "demo", "inputs": {"topic": "x"}})
+        assert r.status_code == 202
+        assert r.json()["status"] == "queued"           # enqueued, not immediately running
+        manifest = await _poll(client, r.json()["run_id"])
+        assert manifest["status"] == "complete"          # the lifespan worker drained it
+
+
+@pytest.mark.asyncio
 async def test_submit_run_and_fetch_results(base_config, atom_home):
     _seed(atom_home)
     engine = WorkflowEngine(base_config, prepared_provider=_provider)
     app = create_app(base_config, engine=engine)
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as client:
+    async with _client(app) as client:
         assert any(w["name"] == "demo" for w in (await client.get("/api/workflows")).json())
 
         r = await client.post("/api/runs", json={"workflow": "demo", "inputs": {"topic": "x"}})
@@ -77,7 +99,7 @@ async def test_missing_required_input_is_422(base_config, atom_home):
     _seed(atom_home)
     engine = WorkflowEngine(base_config, prepared_provider=_provider)
     app = create_app(base_config, engine=engine)
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as client:
+    async with _client(app) as client:
         r = await client.post("/api/runs", json={"workflow": "demo", "inputs": {}})
         assert r.status_code == 422
 
@@ -87,7 +109,7 @@ async def test_runs_list_returns_paginated_summaries(base_config, atom_home):
     _seed(atom_home)
     engine = WorkflowEngine(base_config, prepared_provider=_provider)
     app = create_app(base_config, engine=engine)
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as client:
+    async with _client(app) as client:
         r = await client.post("/api/runs", json={"workflow": "demo", "inputs": {"topic": "x"}})
         run_id = r.json()["run_id"]
         await _poll(client, run_id)
@@ -105,7 +127,7 @@ async def test_unknown_artifact_is_404(base_config, atom_home):
     _seed(atom_home)
     engine = WorkflowEngine(base_config, prepared_provider=_provider)
     app = create_app(base_config, engine=engine)
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as client:
+    async with _client(app) as client:
         r = await client.post("/api/runs", json={"workflow": "demo", "inputs": {"topic": "x"}})
         run_id = r.json()["run_id"]
         await _poll(client, run_id)
@@ -132,7 +154,7 @@ async def test_html_artifact_served_as_attachment(base_config, atom_home):
     _seed(atom_home)
     engine = WorkflowEngine(base_config, prepared_provider=_html_provider)
     app = create_app(base_config, engine=engine)
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as client:
+    async with _client(app) as client:
         r = await client.post("/api/runs", json={"workflow": "demo", "inputs": {"topic": "x"}})
         run_id = r.json()["run_id"]
         await _poll(client, run_id)

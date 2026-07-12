@@ -208,27 +208,6 @@ async def test_execute_load_workflow_fallback_error_terminalizes_run(base_config
 
 
 @pytest.mark.asyncio
-async def test_launch_orphaned_task_terminalized_via_done_callback(base_config, atom_home, monkeypatch):
-    """FIX #1: launch() discards the Task it creates; nothing must let it be GC'd, and
-    any exception it raises must be retrieved and terminalize the run via a done-callback."""
-    engine = WorkflowEngine(base_config)
-    wf = _draft_only()
-    engine.create_run(wf, {"topic": "sea"}, "run_orphan", "2026-07-03T00:00:00")
-
-    async def boom(run_id):
-        raise RuntimeError("boom")
-
-    monkeypatch.setattr(engine, "execute", boom)
-
-    task = engine.launch("run_orphan")
-    await asyncio.gather(task, return_exceptions=True)
-    await asyncio.sleep(0)  # let any call_soon-scheduled done-callback actually run
-
-    assert engine.store.load("run_orphan").status == "halted"
-    assert task not in engine._tasks
-
-
-@pytest.mark.asyncio
 async def test_defs_evicted_after_successful_execute(base_config, atom_home):
     """FIX #7: self._defs must never accumulate one WorkflowDef per run forever in a
     long-lived `atom serve` process."""

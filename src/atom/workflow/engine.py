@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import datetime
 import logging
-from typing import Awaitable, Callable, Optional
+from typing import Callable, Optional
 
 from langchain_core.tracers.langchain import wait_for_all_tracers
 
@@ -31,7 +31,6 @@ from atom.workflow.schema import (
 from atom.workflow.status import compute_run_status, compute_step_status
 
 PreparedProvider = Callable[[TaskDef, StepDef, WorkflowDef], Optional[PreparedModel]]
-Launcher = Callable[[Awaitable], object]
 
 
 def _now() -> str:
@@ -53,18 +52,13 @@ class WorkflowEngine:
         *,
         store: RunStore | None = None,
         prepared_provider: PreparedProvider | None = None,
-        launcher: Launcher | None = None,
         profile: str | None = None,
     ):
         self.cfg = cfg
         self.store = store or RunStore(cfg.home)
         self.prepared_provider = prepared_provider
-        self.launcher: Launcher = launcher or asyncio.create_task
         self.profile = profile or cfg.defaults.agent
         self._defs: dict[str, WorkflowDef] = {}
-        # Strong references to fire-and-forget launch() tasks: keeps them from being GC'd
-        # mid-run and lets _on_task_done retrieve their exceptions (see launch()).
-        self._tasks: dict[asyncio.Task, str] = {}
         # Engine-owned runs dir (workflows/runs/**) is implicitly trusted: if the user has
         # restricted sandbox.allowed_workspace_roots, make sure it still includes the runs dir
         # so tasks can bind their run's shared workspace. An empty list means "allow any" and is
@@ -227,37 +221,6 @@ class WorkflowEngine:
             sem.release()
             if not self._stopping:
                 self._wake.set()                    # a slot freed -> rescan for more work
-
-    def launch(self, run_id: str):
-        """Schedule execute() on the event loop (default asyncio.create_task).
-
-        The caller (e.g. the API's submit_run) discards the return value — this is
-        fire-and-forget. So we keep our own strong reference to the Task (self._tasks;
-        otherwise it could be garbage-collected mid-run) and attach a done-callback that
-        retrieves any exception it raised (otherwise it's logged as "never retrieved" and
-        the run silently never reaches a terminal state).
-        """
-        task = self.launcher(self.execute(run_id))
-        if isinstance(task, asyncio.Task):
-            self._tasks[task] = run_id
-            task.add_done_callback(self._on_task_done)
-        return task
-
-    def _on_task_done(self, task: "asyncio.Task") -> None:
-        run_id = self._tasks.pop(task, None)
-        if task.cancelled():
-            return
-        exc = task.exception()  # retrieves it, so it's not "never retrieved"
-        if exc is None or not run_id:
-            return
-        try:
-            manifest = self.store.load(run_id)
-            if manifest.status not in ("complete", "halted"):
-                manifest.status = "halted"
-                manifest.ended_at = _now()
-                self.store.save(manifest)
-        except Exception:
-            logger.exception("workflow run %s: done-callback cleanup failed", run_id)
 
     # ---- execution ----
     async def execute(self, run_id: str) -> RunManifest:
