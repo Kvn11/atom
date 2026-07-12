@@ -130,6 +130,34 @@ class WorkflowEngine:
         self.store.save(m)
         self._wake.set()
 
+    def recover(self) -> None:
+        """Re-queue runs left non-terminal by a crash/shutdown so the worker resumes them.
+        MUST be called only while holding the worker lease (sole-drainer guarantee)."""
+        for run_id in self.store.interrupted_run_ids():
+            try:
+                m = self.store.load(run_id)
+            except Exception:  # noqa: BLE001 — a corrupt manifest must not block recovery
+                logger.exception("recover: failed to load run %s; skipping", run_id)
+                continue
+            if m.status in ("complete", "halted", "queued"):
+                continue
+            self._reset_interrupted_step(m)
+            m.status = "queued"
+            if m.enqueued_at is None:
+                m.enqueued_at = _now_micros()
+            self.store.save(m)
+            logger.info("recover: re-queued interrupted run %s", run_id)
+
+    @staticmethod
+    def _reset_interrupted_step(m: "RunManifest") -> None:
+        for step in m.steps:
+            if step.status == "running":
+                for t in step.tasks:
+                    if t.status == "running":
+                        t.status = "pending"
+                        t.started_at = None
+                step.status = compute_step_status([t.status for t in step.tasks])
+
     def launch(self, run_id: str):
         """Schedule execute() on the event loop (default asyncio.create_task).
 
