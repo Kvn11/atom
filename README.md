@@ -85,6 +85,28 @@ across runs) and injects a snippet into each task's system prompt telling the ag
 is and to `load_skill("logseq-cli")` for the CLI commands. Try it with `workflows/notes-smoke.yaml`
 (run it twice — the second run recalls the first run's entry).
 
+### Workflow queue
+
+Workflow invocations run through a durable, config-driven queue so they execute one at a time
+(by default) instead of all at once — which keeps sub-agent fan-out from hitting provider rate
+limits. Configure it in `config.yaml`:
+
+```yaml
+queue:
+  max_concurrent_runs: 1   # how many workflow RUNS execute at once; raise as compute grows
+  poll_interval_seconds: 3 # worker re-scan interval for cross-process enqueues + crash recovery
+```
+
+- **Durable:** an enqueued run is written to `$ATOM_HOME/workflows/runs/<id>/run.json` (status
+  `queued`) before it starts, so it is never lost. If the server dies mid-run, the next
+  `atom serve` startup re-queues interrupted runs and resumes them at step granularity (finished
+  steps are skipped).
+- **One drainer:** the `atom serve` process drains the queue. When no server is running,
+  `atom workflow run` drains its own run in-process under a `flock` lease
+  (`$ATOM_HOME/workflows/queue/worker.lock`), so a CLI run and a server can never overlap.
+- **`queue.max_concurrent_runs`** caps concurrent *runs*; **`workflow.max_parallel`** (separate)
+  caps concurrent *tasks within a step*.
+
 #### Exporting a run for offline evaluation
 
 If the run was executed with observability enabled (`observability.enabled: true` and a
