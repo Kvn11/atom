@@ -68,6 +68,10 @@ class QueueConfig(_Base):
     # How often the worker re-scans the store for cross-process enqueues + orphaned runs.
     # In-process API enqueues wake it instantly via an event; this only bounds cross-process latency.
     poll_interval_seconds: float = 3.0
+    # A run whose execute() fails BEFORE writing a terminal status (e.g. an unreadable run.json)
+    # stays queued and would be re-picked forever; after this many consecutive failed drain
+    # attempts the worker quarantines it (skips until restart) instead of hot-looping.
+    max_drain_attempts: int = 5
 
 
 class RetryConfig(_Base):

@@ -68,6 +68,8 @@ class WorkflowEngine:
         self.lease = WorkerLease(self.store.queue_dir / "worker.lock")
         self._wake = asyncio.Event()
         self._inflight: set[str] = set()
+        self._drain_failures: dict[str, int] = {}   # run_id -> consecutive pre-terminal drain failures
+        self._quarantine: set[str] = set()          # run_ids that hit max_drain_attempts (skip until restart)
         self._worker_tasks: set[asyncio.Task] = set()
         self._worker_loop_task: asyncio.Task | None = None
         self._stopping = False
@@ -196,6 +198,8 @@ class WorkflowEngine:
                         break
                     if run_id in self._inflight:
                         continue
+                    if run_id in self._quarantine:
+                        continue
                     await sem.acquire()             # blocks when at capacity
                     if self._stopping:
                         sem.release()
@@ -218,11 +222,30 @@ class WorkflowEngine:
 
     async def _drain_one(self, run_id: str, sem: "asyncio.Semaphore") -> None:
         try:
+            # run_worker's scan is a snapshot (self.store.queued_run_ids() materializes a list);
+            # a run already terminalized by an earlier drain in the SAME snapshot can resurface
+            # here (its _inflight entry was already cleared) before the scan is retaken. Skip it
+            # instead of re-running execute() -- which would crash (its cached WorkflowDef was
+            # already popped after the first pass) and clobber a "complete" status with "halted".
+            if self.store.load(run_id).status in ("complete", "halted"):
+                return
             await self.execute(run_id)
+            self._drain_failures.pop(run_id, None)   # progress made -> reset the failure count
         except asyncio.CancelledError:
             raise
-        except Exception:  # noqa: BLE001 — execute() already terminalizes; this is belt-and-suspenders
-            logger.exception("worker: run %s crashed in execute()", run_id)
+        except Exception:  # noqa: BLE001 — execute() normally terminalizes the run itself; reaching
+            # here means it failed BEFORE writing a terminal status (e.g. an unreadable run.json),
+            # leaving the run queued and re-pickable. Bound the retries so a poison run can't hot-loop.
+            n = self._drain_failures.get(run_id, 0) + 1
+            self._drain_failures[run_id] = n
+            if n >= max(1, self.cfg.queue.max_drain_attempts):
+                self._quarantine.add(run_id)
+                logger.error(
+                    "worker: run %s failed to drain %d× without terminalizing (e.g. unreadable "
+                    "run.json); quarantining -- it will NOT be retried until restart", run_id, n,
+                )
+            else:
+                logger.exception("worker: run %s crashed in execute() (attempt %d)", run_id, n)
         finally:
             self._inflight.discard(run_id)
             sem.release()

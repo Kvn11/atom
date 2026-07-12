@@ -31,6 +31,7 @@ workflow:
 queue:
   max_concurrent_runs: 1   # how many workflow RUNS execute at once (raise when compute grows)
   poll_interval_seconds: 3 # worker re-scan interval for cross-process enqueues + crash recovery
+  max_drain_attempts: 5    # quarantine a run after this many failed drain attempts (e.g. unreadable run.json) instead of hot-looping
 
 guardrails:
   enabled: false           # dormant seam; turn on to gate tool calls (e.g. bash)

@@ -36,6 +36,7 @@ def test_queue_config_defaults():
     cfg = AtomConfig()
     assert cfg.queue.max_concurrent_runs == 1
     assert cfg.queue.poll_interval_seconds == 3.0
+    assert cfg.queue.max_drain_attempts == 5
 
 
 def test_queue_config_override():

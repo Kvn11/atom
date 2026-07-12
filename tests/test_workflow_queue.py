@@ -265,3 +265,43 @@ async def test_await_run_drains_own_run_when_lease_free(base_config, atom_home, 
     assert m.status == "complete"
     assert engine.lease.acquire() is True          # lease was released after draining
     engine.lease.release()
+
+
+@pytest.mark.asyncio
+async def test_worker_quarantines_poison_run_after_max_attempts(base_config, atom_home, monkeypatch):
+    from atom.runtime import RunResult
+
+    base_config.queue.max_drain_attempts = 3
+
+    async def spy(prompt, **kwargs):
+        return RunResult(thread_id=kwargs.get("thread_id", "t"), messages=[], final_text="ok", state={})
+
+    monkeypatch.setattr(engine_mod, "run_agent", spy)
+
+    engine = WorkflowEngine(base_config)
+    engine.create_run(_one_task_wf(), {}, "poison", "2026-07-12T00:00:00")
+    engine.enqueue("poison")
+    engine.create_run(_one_task_wf(), {}, "healthy", "2026-07-12T00:00:01")
+    engine.enqueue("healthy")
+
+    real_execute = engine.execute
+    attempts = {"n": 0}
+
+    async def flaky_execute(run_id):
+        if run_id == "poison":
+            attempts["n"] += 1
+            raise OSError("simulated unreadable run.json")   # fails BEFORE terminalizing
+        return await real_execute(run_id)
+
+    monkeypatch.setattr(engine, "execute", flaky_execute)
+
+    engine.start_worker()
+    for _ in range(300):
+        if engine.store.load("healthy").status == "complete" and "poison" in engine._quarantine:
+            break
+        await asyncio.sleep(0.02)
+    await engine.stop_worker()
+
+    assert engine.store.load("healthy").status == "complete"   # a healthy run is NOT blocked by the poison one
+    assert "poison" in engine._quarantine                       # poison quarantined, not hot-looping forever
+    assert attempts["n"] == 3                                    # bounded at max_drain_attempts (not infinite)
