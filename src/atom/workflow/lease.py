@@ -8,11 +8,8 @@ POSIX only (macOS + Linux); the standalone-drain path is unsupported on Windows.
 from __future__ import annotations
 
 import fcntl
-import logging
 import os
 from pathlib import Path
-
-logger = logging.getLogger(__name__)
 
 
 class WorkerLease:
@@ -21,7 +18,15 @@ class WorkerLease:
         self._fd: int | None = None
 
     def acquire(self) -> bool:
-        """Try to take the lease without blocking. True if held (or already held by us)."""
+        """Try to take the lease without blocking.
+
+        Returns True if the lease is held (including if already held by this handle).
+        Returns False ONLY when another holder currently owns the lock (flock contention).
+
+        Errors from creating or opening the lock file propagate as OSError, which is
+        distinct from contention and signals a broken-filesystem condition that should
+        fail loudly rather than be silently swallowed.
+        """
         if self._fd is not None:
             return True
         self.path.parent.mkdir(parents=True, exist_ok=True)
