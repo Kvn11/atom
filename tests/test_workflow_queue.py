@@ -230,3 +230,21 @@ async def test_worker_survives_transient_scan_error(base_config, atom_home, monk
 
     assert calls["n"] >= 2                              # the loop retried after the error
     assert engine.store.load("sv1").status == "complete"   # worker recovered and drained
+
+
+@pytest.mark.asyncio
+async def test_await_run_drains_own_run_when_lease_free(base_config, atom_home, monkeypatch):
+    from atom.runtime import RunResult
+
+    async def spy(prompt, **kwargs):
+        return RunResult(thread_id=kwargs.get("thread_id", "t"), messages=[], final_text="ok", state={})
+
+    monkeypatch.setattr(engine_mod, "run_agent", spy)
+    engine = WorkflowEngine(base_config)
+    engine.create_run(_one_task_wf(), {}, "cli1", "2026-07-12T00:00:00")
+    engine.enqueue("cli1")
+
+    m = await engine.await_run("cli1")
+    assert m.status == "complete"
+    assert engine.lease.acquire() is True          # lease was released after draining
+    engine.lease.release()

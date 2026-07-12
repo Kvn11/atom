@@ -196,9 +196,10 @@ def workflow_run(
     except MissingInputError as e:
         console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1)
+    engine.enqueue(run_id)
 
     with console.status(f"[bold]running workflow {name}…[/bold]"):
-        manifest = asyncio.run(engine.execute(run_id))
+        manifest = asyncio.run(engine.await_run(run_id))
     for step in manifest.steps:
         marks = ", ".join(f"{t.id}:{t.status}" for t in step.tasks)
         console.print(f"  [bold]{step.title}[/bold] [dim]{step.status}[/dim] — {marks}")

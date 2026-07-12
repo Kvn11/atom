@@ -222,6 +222,25 @@ class WorkflowEngine:
             if not self._stopping:
                 self._wake.set()                    # a slot freed -> rescan for more work
 
+    async def await_run(self, run_id: str) -> "RunManifest":
+        """Block until run_id is terminal. If no drainer holds the lease, become it and execute
+        THIS run (step-level resume), then release; otherwise poll while another process drains,
+        retrying the lease so a dead drainer is taken over. Never runs another user's run."""
+        poll = float(self.cfg.queue.poll_interval_seconds)
+        while True:
+            m = self.store.load(run_id)
+            if m.status in ("complete", "halted"):
+                return m
+            if self.lease.acquire():
+                try:
+                    self.recover()
+                    if self.store.load(run_id).status not in ("complete", "halted"):
+                        await self.execute(run_id)
+                finally:
+                    self.lease.release()
+                return self.store.load(run_id)
+            await asyncio.sleep(poll)
+
     # ---- execution ----
     async def execute(self, run_id: str) -> RunManifest:
         try:
