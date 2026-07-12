@@ -110,3 +110,29 @@ async def test_execute_resumes_skipping_completed_step(base_config, atom_home, m
 def engine_store_ws(cfg, run_id):
     from atom.workflow.run_store import RunStore
     return RunStore(cfg.home).workspace_dir(run_id)
+
+
+@pytest.mark.asyncio
+async def test_execute_cancelled_requeues_run_not_halted(base_config, atom_home, monkeypatch):
+    from atom.runtime import RunResult
+
+    started = asyncio.Event()
+
+    async def slow(prompt, **kwargs):
+        started.set()
+        await asyncio.sleep(30)          # block so we can cancel mid-run
+        return RunResult(thread_id=kwargs.get("thread_id", "t"), messages=[], final_text="ok", state={})
+
+    monkeypatch.setattr(engine_mod, "run_agent", slow)
+    engine = WorkflowEngine(base_config)
+    engine.create_run(_one_task_wf(), {}, "cx1", "2026-07-12T00:00:00")
+    engine.enqueue("cx1")
+
+    task = asyncio.create_task(engine.execute("cx1"))
+    await asyncio.wait_for(started.wait(), timeout=5)   # ensure execute() is mid-run
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    # requeued for step-level resume next start, NOT halted
+    assert engine.store.load("cx1").status == "queued"
