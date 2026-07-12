@@ -21,6 +21,7 @@ from atom.config.schema import AtomConfig
 from atom.notes import ensure_vault
 from atom.observability import apply_observability_env, build_lead_trace, tracing_active
 from atom.runtime import run_agent
+from atom.workflow.lease import WorkerLease
 from atom.workflow.run_store import (
     RunManifest, RunStore, StepState, TaskState, serialize_messages,
 )
@@ -35,6 +36,10 @@ Launcher = Callable[[Awaitable], object]
 
 def _now() -> str:
     return datetime.datetime.now().isoformat(timespec="seconds")
+
+
+def _now_micros() -> str:
+    return datetime.datetime.now().isoformat(timespec="microseconds")
 
 
 def task_thread_id(run_id: str, step_index: int, task_id: str) -> str:
@@ -65,6 +70,13 @@ class WorkflowEngine:
         # so tasks can bind their run's shared workspace. An empty list means "allow any" and is
         # left untouched. Built once here (never mutates self.cfg in place).
         self._task_cfg = self._build_task_cfg(cfg)
+        # --- durable-queue worker state ---
+        self.lease = WorkerLease(self.store.queue_dir / "worker.lock")
+        self._wake = asyncio.Event()
+        self._inflight: set[str] = set()
+        self._worker_tasks: set[asyncio.Task] = set()
+        self._worker_loop_task: asyncio.Task | None = None
+        self._stopping = False
         # Map observability config -> LANGSMITH_* env once, before any run (idempotent).
         status = apply_observability_env(cfg)
         if status.active:
@@ -106,6 +118,17 @@ class WorkflowEngine:
         )
         self._defs[run_id] = workflow
         return self.store.create(manifest)
+
+    def enqueue(self, run_id: str) -> None:
+        """Mark a created run as queued (durable + atomic) and wake any in-process worker.
+        The job is safe the instant this returns; a worker picks it up in FIFO order."""
+        m = self.store.load(run_id)
+        if m.status in ("complete", "halted"):
+            return                       # never re-open a terminal run
+        m.status = "queued"
+        m.enqueued_at = _now_micros()
+        self.store.save(m)
+        self._wake.set()
 
     def launch(self, run_id: str):
         """Schedule execute() on the event loop (default asyncio.create_task).
