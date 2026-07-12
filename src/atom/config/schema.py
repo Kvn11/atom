@@ -61,6 +61,15 @@ class WorkflowConfig(_Base):
     task_timeout_seconds: int = 1800
 
 
+class QueueConfig(_Base):
+    # How many workflow RUNS execute at once (distinct from workflow.max_parallel, which caps
+    # TASKS within a step). Default 1 = strictly one workflow at a time. Raise as compute grows.
+    max_concurrent_runs: int = 1
+    # How often the worker re-scans the store for cross-process enqueues + orphaned runs.
+    # In-process API enqueues wake it instantly via an event; this only bounds cross-process latency.
+    poll_interval_seconds: float = 3.0
+
+
 class RetryConfig(_Base):
     # Transient-provider-error retry for every model call (lead + sub-agents + summarizer).
     # 20 attempts with full-jitter exponential backoff, then the task fails.
@@ -127,6 +136,7 @@ class AtomConfig(_Base):
     compaction: CompactionConfig = Field(default_factory=CompactionConfig)
     library: LibraryConfig = Field(default_factory=LibraryConfig)
     workflow: WorkflowConfig = Field(default_factory=WorkflowConfig)
+    queue: QueueConfig = Field(default_factory=QueueConfig)
     retry: RetryConfig = Field(default_factory=RetryConfig)
     guardrails: GuardrailConfig = Field(default_factory=GuardrailConfig)
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)

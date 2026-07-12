@@ -29,3 +29,16 @@ def test_retry_config_override():
     rc = RetryConfig(max_retries=5, base_delay=0.5, max_delay=10.0, jitter=False)
     assert rc.max_retries == 5 and rc.base_delay == 0.5
     assert rc.max_delay == 10.0 and rc.jitter is False
+
+
+def test_queue_config_defaults():
+    from atom.config.schema import AtomConfig
+    cfg = AtomConfig()
+    assert cfg.queue.max_concurrent_runs == 1
+    assert cfg.queue.poll_interval_seconds == 3.0
+
+
+def test_queue_config_override():
+    from atom.config.schema import QueueConfig
+    qc = QueueConfig(max_concurrent_runs=3, poll_interval_seconds=0.5)
+    assert qc.max_concurrent_runs == 3 and qc.poll_interval_seconds == 0.5
