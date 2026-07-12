@@ -177,3 +177,30 @@ def test_list_summaries_clamps_negative_offset(atom_home):
     page = store.list_summaries(offset=-1)
     assert [i["run_id"] for i in page["items"]] == ["r2", "r1"]
     assert page["total"] == 2
+
+
+def _mk(run_id, status, enqueued_at=None, created_at="2026-07-12T00:00:00"):
+    from atom.workflow.run_store import RunManifest
+    return RunManifest(
+        run_id=run_id, workflow="wf", status=status,
+        created_at=created_at, enqueued_at=enqueued_at, workspace_path="/x", steps=[],
+    )
+
+
+def test_queue_dir_path(atom_home):
+    from atom.workflow.run_store import RunStore
+    store = RunStore(str(atom_home))
+    assert store.queue_dir == atom_home / "workflows" / "queue"
+
+
+def test_queued_run_ids_fifo_and_interrupted(atom_home):
+    from atom.workflow.run_store import RunStore
+    store = RunStore(str(atom_home))
+    store.create(_mk("b", "queued", enqueued_at="2026-07-12T00:00:02.000000"))
+    store.create(_mk("a", "queued", enqueued_at="2026-07-12T00:00:01.000000"))
+    store.create(_mk("done", "complete"))
+    store.create(_mk("mid", "running"))
+    store.create(_mk("new", "pending"))
+
+    assert store.queued_run_ids() == ["a", "b"]           # FIFO by enqueued_at
+    assert set(store.interrupted_run_ids()) == {"mid", "new"}

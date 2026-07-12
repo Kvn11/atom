@@ -13,7 +13,7 @@ from atom.messages import message_text
 from atom.sandbox.paths import atom_home
 
 
-_ACTIVE = ("pending", "running")
+_ACTIVE = ("pending", "queued", "running")
 
 
 class ArtifactRef(BaseModel):
@@ -48,6 +48,7 @@ class RunManifest(BaseModel):
     inputs: dict[str, Any] = Field(default_factory=dict)
     status: str = "pending"            # pending | running | complete | halted
     created_at: str
+    enqueued_at: Optional[str] = None  # microsecond-precision; primary FIFO sort key
     ended_at: Optional[str] = None
     workspace_path: str
     steps: list[StepState] = Field(default_factory=list)
@@ -58,6 +59,7 @@ class RunSummary(BaseModel):
     workflow: str
     status: str
     created_at: str
+    enqueued_at: Optional[str] = None
     ended_at: Optional[str] = None
     steps_total: int
     steps_done: int
@@ -70,7 +72,7 @@ def summarize(manifest: RunManifest) -> RunSummary:
     tasks = [t for s in manifest.steps for t in s.tasks]
     return RunSummary(
         run_id=manifest.run_id, workflow=manifest.workflow, status=manifest.status,
-        created_at=manifest.created_at, ended_at=manifest.ended_at,
+        created_at=manifest.created_at, enqueued_at=manifest.enqueued_at, ended_at=manifest.ended_at,
         steps_total=len(manifest.steps),
         steps_done=sum(1 for s in manifest.steps if s.status == "complete"),
         tasks_total=len(tasks),
@@ -104,6 +106,10 @@ class RunStore:
     @property
     def runs_dir(self) -> Path:
         return self.home / "workflows" / "runs"
+
+    @property
+    def queue_dir(self) -> Path:
+        return self.home / "workflows" / "queue"
 
     def run_dir(self, run_id: str) -> Path:
         return self.runs_dir / run_id
@@ -234,11 +240,7 @@ class RunStore:
         empty = {"items": [], "total": 0, "counts": {"active": 0, "complete": 0, "halted": 0}}
         if not self.runs_dir.is_dir():
             return empty
-        summaries: list[RunSummary] = []
-        for d in self.runs_dir.iterdir():
-            s = self._read_summary(d)
-            if s is not None:
-                summaries.append(s)
+        summaries = self._scan_summaries()
         counts = {"active": 0, "complete": 0, "halted": 0}
         for s in summaries:
             if s.status in _ACTIVE:
@@ -254,3 +256,21 @@ class RunStore:
         total = len(summaries)
         page = summaries[offset:offset + limit]
         return {"items": [s.model_dump() for s in page], "total": total, "counts": counts}
+
+    def _scan_summaries(self) -> list["RunSummary"]:
+        if not self.runs_dir.is_dir():
+            return []
+        out: list[RunSummary] = []
+        for d in self.runs_dir.iterdir():
+            s = self._read_summary(d)
+            if s is not None:
+                out.append(s)
+        return out
+
+    def queued_run_ids(self) -> list[str]:
+        q = [s for s in self._scan_summaries() if s.status == "queued"]
+        q.sort(key=lambda s: (s.enqueued_at or s.created_at, s.run_id))
+        return [s.run_id for s in q]
+
+    def interrupted_run_ids(self) -> list[str]:
+        return [s.run_id for s in self._scan_summaries() if s.status in ("pending", "running")]
