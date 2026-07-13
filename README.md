@@ -115,12 +115,17 @@ If the run was executed with observability enabled (`observability.enabled: true
     atom workflow export <run_id>              # one run by id
     atom workflow export --latest <workflow>   # newest run of a workflow
     atom workflow export --all <workflow>      # every run of a workflow
+    atom workflow export <run_id> --task 0:writer   # just one completed task (step 0, task "writer")
 
-This writes `$ATOM_HOME/workflows/runs/<run_id>/export.json` — a self-contained record holding the
-raw LangSmith run tree (lead tasks plus nested sub-agent and per-LLM-call runs, with reasoning/thinking
-blocks intact), the run's `run.json` manifest (inputs + per-task verdict), and a `complete` flag. It is
-the input to the separate offline evaluation pipeline. Runs executed without observability have nothing
-to download (the command reports "no traces found").
+The whole-run form writes `$ATOM_HOME/workflows/runs/<run_id>/export.json`; `--task` writes
+`.../runs/<run_id>/exports/s<step>__<task>.json` — either is a self-contained record holding the
+raw LangSmith run tree (lead task(s) plus nested sub-agent and per-LLM-call runs, with
+reasoning/thinking blocks intact), the run's `run.json` manifest (inputs + per-task verdict), and a
+`complete` flag. A whole run can be exported once all steps complete; a single task once it reaches
+a terminal state (`succeeded`/`failed`), so partial runs are still salvageable task-by-task. Both are
+also available from the web UI (**Export run** in the run header, **Export task** in the transcript
+toolbar). It is the input to the separate offline evaluation pipeline. Runs executed without
+observability have nothing to download (the command reports "no traces found").
 
 ## Observability (LangSmith)
 

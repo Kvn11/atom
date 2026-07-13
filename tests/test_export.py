@@ -11,7 +11,9 @@ from atom.observability.export import (
     build_envelope,
     expected_root_count,
     export_run,
+    export_task,
     fetch_run_tree,
+    fetch_task_tree,
     resolve_run_ids,
 )
 from atom.workflow.run_store import RunManifest, RunStore, StepState, TaskState
@@ -48,10 +50,22 @@ def test_build_envelope_shape():
     assert env["exported_at"] == "2026-07-09T12:00:00"
     assert env["complete"] is True and env["expected_roots"] == 1 and env["fetched_roots"] == 1
     assert env["roots"] == roots
+    assert env["scope"] == "run" and env["task_id"] is None   # run-wide export
     assert env["atom_manifest"]["run_id"] == "r1"          # manifest embedded verbatim
     assert env["atom_manifest"]["steps"][0]["tasks"][0]["status"] == "succeeded"
     # Whole envelope must be JSON-serializable.
     assert json.loads(json.dumps(env))["run_id"] == "r1"
+
+
+def test_build_envelope_task_scope():
+    m = _manifest("r1", ["succeeded"])
+    roots = [{"id": "root0"}]
+    env = build_envelope(
+        "r1", "wf", "proj", m, roots, complete=True, expected=1, fetched=1,
+        now="t", task_id="t0", session_id="r1:s0:t0",
+    )
+    assert env["scope"] == "task"
+    assert env["task_id"] == "t0" and env["session_id"] == "r1:s0:t0"
 
 
 def test_export_result_is_a_dataclass():
@@ -177,6 +191,84 @@ def test_export_run_unknown_run(atom_home, monkeypatch):
     monkeypatch.setenv("LANGSMITH_API_KEY", "k")
     with pytest.raises(FileNotFoundError):
         export_run(str(atom_home), "nope", project="proj", client=_FakeClient([[]], {}))
+
+
+def test_fetch_task_tree_filters_by_session_id():
+    client = _FakeClient(
+        [["root0"]], {"root0": {"id": "root0", "child_runs": [{"run_type": "llm"}]}},
+    )
+    trees = fetch_task_tree(client, "proj", "r1:s0:t0")
+    assert [t["id"] for t in trees] == ["root0"]
+    assert trees[0]["child_runs"][0]["run_type"] == "llm"     # sub-agent tree hydrated
+    assert 'session_id' in client.filters[0] and 'r1:s0:t0' in client.filters[0]
+
+
+def test_export_task_happy_path(atom_home, monkeypatch):
+    monkeypatch.setenv("LANGSMITH_API_KEY", "k")
+    _store_with_run(atom_home, "r1", ["succeeded", "succeeded"])
+    client = _FakeClient(
+        [["root0"]],
+        {"root0": {"id": "root0", "child_runs": [{"run_type": "llm", "outputs": {"thinking": "…"}}]}},
+    )
+    result = export_task(str(atom_home), "r1", 0, "t0", project="proj", client=client,
+                         now=lambda: "2026-07-13T12:00:00", sleep=_no_sleep)
+    assert result.task_id == "t0" and result.complete is True
+    assert result.fetched_roots == 1 and result.expected_roots == 1
+    # filtered by the task's own session_id (thread_id), not the run-wide run_id
+    assert 'session_id' in client.filters[0] and 'r1:s0:t0' in client.filters[0]
+    assert result.path.endswith("exports/s0__t0.json")
+    env = json.loads(Path(result.path).read_text())
+    assert env["scope"] == "task" and env["task_id"] == "t0" and env["session_id"] == "r1:s0:t0"
+    assert env["roots"][0]["child_runs"][0]["outputs"]["thinking"] == "…"   # reasoning present
+
+
+def test_export_task_failed_task_is_exportable(atom_home, monkeypatch):
+    monkeypatch.setenv("LANGSMITH_API_KEY", "k")
+    _store_with_run(atom_home, "r1", ["failed"])
+    client = _FakeClient([["root0"]], {"root0": {"id": "root0"}})
+    result = export_task(str(atom_home), "r1", 0, "t0", project="proj", client=client,
+                         now=lambda: "t", sleep=_no_sleep)
+    assert result.complete is True and result.fetched_roots == 1   # failed traces still export
+
+
+def test_export_task_rejects_non_terminal(atom_home, monkeypatch):
+    monkeypatch.setenv("LANGSMITH_API_KEY", "k")
+    _store_with_run(atom_home, "r1", ["running", "succeeded"])
+    with pytest.raises(ValueError, match="not completed"):
+        export_task(str(atom_home), "r1", 0, "t0", project="proj", client=_FakeClient([[]], {}))
+
+
+def test_export_task_unknown_task_and_step(atom_home, monkeypatch):
+    monkeypatch.setenv("LANGSMITH_API_KEY", "k")
+    _store_with_run(atom_home, "r1", ["succeeded"])
+    with pytest.raises(KeyError):
+        export_task(str(atom_home), "r1", 0, "nope", project="proj", client=_FakeClient([[]], {}))
+    with pytest.raises(KeyError):
+        export_task(str(atom_home), "r1", 9, "t0", project="proj", client=_FakeClient([[]], {}))
+
+
+def test_export_task_no_traces_writes_nothing(atom_home, monkeypatch):
+    monkeypatch.setenv("LANGSMITH_API_KEY", "k")
+    store = _store_with_run(atom_home, "r1", ["succeeded"])
+    client = _FakeClient([[]], {})     # tracing was off -> nothing in LangSmith
+    clock = iter([0.0, 100.0])
+    result = export_task(str(atom_home), "r1", 0, "t0", project="proj", client=client,
+                         now=lambda: "t", sleep=_no_sleep, monotonic=lambda: next(clock))
+    assert result.fetched_roots == 0 and result.path == "" and result.task_id == "t0"
+    assert not (store.run_dir("r1") / "exports" / "s0__t0.json").exists()
+
+
+def test_export_task_requires_api_key(atom_home, monkeypatch):
+    monkeypatch.delenv("LANGSMITH_API_KEY", raising=False)
+    _store_with_run(atom_home, "r1", ["succeeded"])
+    with pytest.raises(RuntimeError, match="LANGSMITH_API_KEY"):
+        export_task(str(atom_home), "r1", 0, "t0", project="proj", client=_FakeClient([[]], {}))
+
+
+def test_export_task_unknown_run(atom_home, monkeypatch):
+    monkeypatch.setenv("LANGSMITH_API_KEY", "k")
+    with pytest.raises(FileNotFoundError):
+        export_task(str(atom_home), "nope", 0, "t0", project="proj", client=_FakeClient([[]], {}))
 
 
 def test_resolve_run_ids_selectors(atom_home):

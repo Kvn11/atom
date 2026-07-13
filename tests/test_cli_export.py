@@ -15,6 +15,12 @@ def _ok(run_id, **kw):
                         expected_roots=kw.get("expected", 1), fetched_roots=kw.get("fetched", 1))
 
 
+def _ok_task(run_id, task_id="writer", **kw):
+    return ExportResult(run_id=run_id, path=f"/x/{run_id}/exports/s0__{task_id}.json",
+                        complete=kw.get("complete", True), expected_roots=1,
+                        fetched_roots=kw.get("fetched", 1), task_id=task_id)
+
+
 def test_export_single_run(monkeypatch):
     seen = {}
     monkeypatch.setattr(export_mod, "resolve_run_ids",
@@ -85,3 +91,60 @@ def test_export_run_not_found_exits_1(monkeypatch):
     res = runner.invoke(app, ["workflow", "export", "ghost", "--project", "proj"])
     assert res.exit_code == 1
     assert "not found" in res.stdout
+
+
+# --- per-task export (--task <step>:<task_id>) ---
+
+def test_export_task_success(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(export_mod, "resolve_run_ids",
+                        lambda home, **kw: [kw["run_id"]] if kw.get("run_id") else [])
+    def fake(home, run_id, step_index, task_id, *, project, **kw):
+        seen.update(run_id=run_id, step=step_index, task=task_id, project=project)
+        return _ok_task(run_id, task_id)
+    monkeypatch.setattr(export_mod, "export_task", fake)
+    res = runner.invoke(app, ["workflow", "export", "abc123", "--task", "0:writer", "--project", "proj"])
+    assert res.exit_code == 0
+    assert seen == {"run_id": "abc123", "step": 0, "task": "writer", "project": "proj"}
+    assert "exported abc123 task 0:writer" in res.stdout
+
+
+def test_export_task_rejects_with_all(monkeypatch):
+    res = runner.invoke(app, ["workflow", "export", "--all", "wf", "--task", "0:writer", "--project", "proj"])
+    assert res.exit_code == 1
+    assert "--all" in res.stdout
+
+
+def test_export_task_malformed_selector_exits_1(monkeypatch):
+    res = runner.invoke(app, ["workflow", "export", "abc123", "--task", "garbage", "--project", "proj"])
+    assert res.exit_code == 1
+    assert "step_index" in res.stdout
+
+
+def test_export_task_non_terminal_exits_1(monkeypatch):
+    monkeypatch.setattr(export_mod, "resolve_run_ids", lambda home, **kw: ["r1"])
+    def not_done(home, rid, step, tid, *, project, **kw):
+        raise ValueError("task 'writer' has not completed (status: running)")
+    monkeypatch.setattr(export_mod, "export_task", not_done)
+    res = runner.invoke(app, ["workflow", "export", "r1", "--task", "0:writer", "--project", "proj"])
+    assert res.exit_code == 1
+    assert "has not completed" in res.stdout
+
+
+def test_export_task_unknown_task_exits_1(monkeypatch):
+    monkeypatch.setattr(export_mod, "resolve_run_ids", lambda home, **kw: ["r1"])
+    def missing(home, rid, step, tid, *, project, **kw):
+        raise KeyError(f"task {tid!r} not found in step {step} of run {rid!r}")
+    monkeypatch.setattr(export_mod, "export_task", missing)
+    res = runner.invoke(app, ["workflow", "export", "r1", "--task", "0:ghost", "--project", "proj"])
+    assert res.exit_code == 1
+    assert "not found" in res.stdout
+
+
+def test_export_task_no_traces_exits_1(monkeypatch):
+    monkeypatch.setattr(export_mod, "resolve_run_ids", lambda home, **kw: ["r1"])
+    monkeypatch.setattr(export_mod, "export_task",
+                        lambda home, rid, step, tid, *, project, **kw: _ok_task(rid, tid, fetched=0, complete=False))
+    res = runner.invoke(app, ["workflow", "export", "r1", "--task", "0:writer", "--project", "proj"])
+    assert res.exit_code == 1
+    assert "no traces found" in res.stdout

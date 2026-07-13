@@ -23,6 +23,8 @@ export function RunView({ runId, onBack }: { runId: string; onBack: () => void }
   const [sel, setSel] = useState<Sel | null>(null);
   const [tab, setTab] = useState<"transcript" | "deliverables">("transcript");
   const [openArt, setOpenArt] = useState<Artifact | null>(null);
+  const [exporting, setExporting] = useState<"run" | "task" | null>(null);
+  const [exportMsg, setExportMsg] = useState<{ text: string; kind: "ok" | "warn" | "err" } | null>(null);
 
   useEffect(() => {
     let live = true;
@@ -54,6 +56,30 @@ export function RunView({ runId, onBack }: { runId: string; onBack: () => void }
     ? Math.min(manifest.status === "complete" ? doneSteps : doneSteps + 1, manifest.steps.length)
     : 0;
 
+  const selTask = manifest && sel
+    ? manifest.steps.find((s) => s.index === sel.step)?.tasks.find((t) => t.id === sel.task) ?? null
+    : null;
+  const taskTerminal = selTask?.status === "succeeded" || selTask?.status === "failed";
+
+  const runExport = async (body?: { step: number; task: string }) => {
+    setExporting(body ? "task" : "run");
+    setExportMsg(null);
+    try {
+      const res = await api.exportRun(runId, body);
+      if (res.fetched_roots === 0) {
+        setExportMsg({ text: "No traces found — was observability enabled for this run?", kind: "warn" });
+      } else {
+        const what = res.scope === "task" ? `task ${res.task_id}` : "run";
+        const partial = res.complete ? "" : ` (partial: ${res.fetched_roots}/${res.expected_roots})`;
+        setExportMsg({ text: `Exported ${what} → ${res.path}${partial}`, kind: res.complete ? "ok" : "warn" });
+      }
+    } catch (e) {
+      setExportMsg({ text: e instanceof Error ? e.message : String(e), kind: "err" });
+    } finally {
+      setExporting(null);
+    }
+  };
+
   return (
     <div className="runview">
       <div className="run-head">
@@ -67,9 +93,23 @@ export function RunView({ runId, onBack }: { runId: string; onBack: () => void }
             <StatusPill status={manifest.status} />
             <span className="dim">Step {curStep} of {manifest.steps.length}</span>
             <span className="dim">{elapsed(manifest.created_at, manifest.ended_at)}</span>
+            <button className="btn-sm" disabled={manifest.status !== "complete" || exporting !== null}
+              onClick={() => runExport()}
+              title={manifest.status === "complete"
+                ? "Download this run's LangSmith traces"
+                : "Available once all steps complete"}>
+              {exporting === "run" ? "Exporting…" : "Export run"}
+            </button>
           </div>
         )}
       </div>
+
+      {exportMsg && (
+        <div className={`export-banner ${exportMsg.kind}`}>
+          <span className="export-text">{exportMsg.text}</span>
+          <button className="export-x" onClick={() => setExportMsg(null)} title="Dismiss">✕</button>
+        </div>
+      )}
 
       {!manifest ? (
         <div className="loading">Loading…</div>
@@ -112,6 +152,15 @@ export function RunView({ runId, onBack }: { runId: string; onBack: () => void }
               <button className={tab === "deliverables" ? "on" : ""} onClick={() => setTab("deliverables")}>
                 Deliverables{arts.length ? ` (${arts.length})` : ""}
               </button>
+              {tab === "transcript" && sel && (
+                <button className="btn-sm tabbar-action" disabled={!taskTerminal || exporting !== null}
+                  onClick={() => runExport({ step: sel.step, task: sel.task })}
+                  title={taskTerminal
+                    ? "Download this task's LangSmith trace"
+                    : "Available once the task completes"}>
+                  {exporting === "task" ? "Exporting…" : "Export task"}
+                </button>
+              )}
             </div>
             {tab === "transcript"
               ? <Transcript runId={runId} sel={sel} status={manifest.status} />

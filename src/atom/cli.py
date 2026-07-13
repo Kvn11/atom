@@ -227,15 +227,67 @@ def workflow_runs(config: str = typer.Option(None, "--config", "-c")) -> None:
         console.print(f"{m.run_id}  [bold]{m.workflow}[/bold]  [dim]{m.status}  {m.created_at}[/dim]")
 
 
+def _parse_task_selector(sel: str) -> tuple[int, str]:
+    """Parse a --task selector ``<step_index>:<task_id>`` (e.g. ``0:writer``)."""
+    step_str, sep, task_id = sel.partition(":")
+    if not sep or not task_id or not step_str.isdigit():
+        raise ValueError(f"--task must be <step_index>:<task_id> (e.g. 0:writer), got {sel!r}")
+    return int(step_str), task_id
+
+
+def _export_one_task(export_mod, cfg, proj: str, run_id, latest, all_workflow, task: str) -> None:
+    """Export a single task's trace (runs/<id>/exports/s<step>__<task>.json)."""
+    if all_workflow:
+        console.print("[red]--task cannot be combined with --all (pick one run via <run_id> or --latest)[/red]")
+        raise typer.Exit(1)
+    try:
+        step_index, task_id = _parse_task_selector(task)
+    except ValueError as e:
+        console.print(f"[red]{e}[/red]")
+        raise typer.Exit(1)
+    try:
+        run_ids = export_mod.resolve_run_ids(cfg.home, run_id=run_id, latest=latest)
+    except ValueError as e:
+        console.print(f"[red]{e}[/red]")
+        raise typer.Exit(1)
+    rid = run_ids[0]
+    try:
+        result = export_mod.export_task(cfg.home, rid, step_index, task_id, project=proj)
+    except FileNotFoundError:
+        console.print(f"[red]run '{rid}' not found[/red]")
+        raise typer.Exit(1)
+    except KeyError as e:                                  # unknown step/task — print the plain message
+        console.print(f"[red]{e.args[0] if e.args else e}[/red]")
+        raise typer.Exit(1)
+    except (ValueError, RuntimeError) as e:               # not-terminal / no project / missing API key
+        console.print(f"[red]{e}[/red]")
+        raise typer.Exit(1)
+    except Exception as e:  # noqa: BLE001 — surface LangSmith API/network errors cleanly
+        console.print(f"[red]export failed for {rid} task {step_index}:{task_id}: {type(e).__name__}: {e}[/red]")
+        raise typer.Exit(1)
+    if result.fetched_roots == 0:
+        console.print(
+            f"[red]no traces found for {rid} task {step_index}:{task_id} "
+            f"— was observability enabled when it ran?[/red]"
+        )
+        raise typer.Exit(1)
+    console.print(f"exported {rid} task {step_index}:{task_id} → {result.path}")
+
+
 @workflow_app.command("export")
 def workflow_export(
     run_id: str = typer.Argument(None, help="Run id to export."),
     latest: str = typer.Option(None, "--latest", help="Export the newest run of this workflow."),
     all_workflow: str = typer.Option(None, "--all", help="Export every run of this workflow."),
+    task: str = typer.Option(None, "--task", help="Export one completed task: <step_index>:<task_id> (e.g. 0:writer)."),
     project: str = typer.Option(None, "--project", help="LangSmith project (default: observability.project)."),
     config: str = typer.Option(None, "--config", "-c"),
 ) -> None:
-    """Download a run's LangSmith traces to runs/<run_id>/export.json (for offline evaluation)."""
+    """Download LangSmith traces for offline evaluation.
+
+    Whole run -> runs/<run_id>/export.json. With --task, one completed task ->
+    runs/<run_id>/exports/s<step>__<task>.json.
+    """
     from atom.observability import export as export_mod
 
     _load_env()
@@ -244,6 +296,10 @@ def workflow_export(
     if not proj:
         console.print("[red]no LangSmith project — set observability.project or pass --project[/red]")
         raise typer.Exit(1)
+
+    if task is not None:
+        _export_one_task(export_mod, cfg, proj, run_id, latest, all_workflow, task)
+        return
 
     try:
         run_ids = export_mod.resolve_run_ids(

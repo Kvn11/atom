@@ -20,6 +20,10 @@ export interface RunSummary {
 }
 export interface RunsPage { items: RunSummary[]; total: number; counts: { active: number; complete: number; halted: number }; }
 export interface Artifact extends ArtifactRef { step: number; task: string; }
+export interface ExportResponse {
+  run_id: string; scope: "run" | "task"; task_id: string | null;
+  path: string; complete: boolean; expected_roots: number; fetched_roots: number;
+}
 
 const j = async (r: Response) => { if (!r.ok) throw new Error(await r.text()); return r.json(); };
 
@@ -41,4 +45,15 @@ export const api = {
   artifacts: (id: string): Promise<Artifact[]> => fetch(`/api/runs/${id}/artifacts`).then(j),
   artifactText: (id: string, rel: string): Promise<string> =>
     fetch(artifactUrl(id, rel)).then(async (r) => { if (!r.ok) throw new Error(await r.text()); return r.text(); }),
+  // Whole run when body is omitted; one task when { step, task } is given. Surfaces the API's
+  // {detail} message on error (e.g. "task not completed", "run not found").
+  exportRun: (id: string, body?: { step: number; task: string }): Promise<ExportResponse> =>
+    fetch(`/api/runs/${id}/export`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body ?? {}),
+    }).then(async (r) => {
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data.detail || `export failed (${r.status})`);
+      return data as ExportResponse;
+    }),
 };

@@ -14,7 +14,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
-from atom.api.models import RunRequest
+from atom.api.models import ExportRequest, RunRequest
 from atom.config import load_config
 from atom.config.schema import AtomConfig
 from atom.workflow.engine import WorkflowEngine
@@ -97,6 +97,44 @@ def create_app(cfg: AtomConfig | None = None, engine: WorkflowEngine | None = No
         if chat is None:
             raise HTTPException(404, "no chat yet")
         return chat
+
+    @app.post("/api/runs/{run_id}/export")
+    def export_traces(run_id: str, body: ExportRequest | None = None) -> dict:
+        """Download this run's LangSmith trace(s) to disk. With step+task -> one task; else the run.
+
+        Sync def on purpose: the exporter polls LangSmith with blocking sleeps, so FastAPI runs it
+        in a threadpool and never stalls the event loop / queue worker.
+        """
+        from atom.observability import export as export_mod
+
+        body = body or ExportRequest()
+        proj = cfg.observability.project
+        if not proj:                                          # server isn't configured for export — 5xx, not the client's fault
+            raise HTTPException(503, "export not configured: set observability.project")
+        try:
+            if body.step is not None and body.task is not None:
+                res = export_mod.export_task(cfg.home, run_id, body.step, body.task, project=proj)
+            else:
+                res = export_mod.export_run(cfg.home, run_id, project=proj)
+        except FileNotFoundError:
+            raise HTTPException(404, "run not found")
+        except KeyError as e:                                 # unknown step/task
+            raise HTTPException(404, e.args[0] if e.args else "not found")
+        except RuntimeError as e:                             # missing LANGSMITH_API_KEY — server config, not the client's fault
+            raise HTTPException(503, str(e))
+        except ValueError as e:                               # task not terminal yet — client can retry once it completes
+            raise HTTPException(400, str(e))
+        except Exception as e:  # noqa: BLE001 — LangSmith/network failure
+            raise HTTPException(502, f"export failed: {type(e).__name__}: {e}")
+        return {
+            "run_id": res.run_id,
+            "scope": "task" if res.task_id else "run",
+            "task_id": res.task_id,
+            "path": res.path,
+            "complete": res.complete,
+            "expected_roots": res.expected_roots,
+            "fetched_roots": res.fetched_roots,
+        }
 
     @app.get("/api/runs/{run_id}/artifacts")
     def get_artifacts(run_id: str) -> list:

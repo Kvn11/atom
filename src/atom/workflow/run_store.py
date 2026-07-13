@@ -82,10 +82,20 @@ def summarize(manifest: RunManifest) -> RunSummary:
 
 
 def serialize_messages(messages: list) -> list[dict]:
-    """Flatten LangChain messages to a UI-friendly list of dicts."""
+    """Flatten LangChain messages to a UI-friendly list of dicts.
+
+    The opening prompt of a workflow task is a ``HumanMessage`` only because chat providers
+    require a human/user turn to start a conversation — no human authored it; the automated
+    workflow did. Relabel that first human turn as ``"task"`` so the transcript is accurate.
+    Injected mid-turn human notes (skill activations, view-image blocks) keep ``"human"``.
+    """
     out: list[dict] = []
+    opening_relabeled = False
     for m in messages:
         role = getattr(m, "type", m.__class__.__name__.replace("Message", "").lower())
+        if role == "human" and not opening_relabeled:
+            role = "task"
+            opening_relabeled = True
         entry: dict = {"role": role, "text": message_text(m)}
         tcs = getattr(m, "tool_calls", None)
         if tcs:
@@ -119,6 +129,13 @@ class RunStore:
 
     def artifacts_dir(self, run_id: str) -> Path:
         return self.run_dir(run_id) / "artifacts"
+
+    def exports_dir(self, run_id: str) -> Path:
+        return self.run_dir(run_id) / "exports"
+
+    def task_export_path(self, run_id: str, step_index: int, task_id: str) -> Path:
+        """Per-task trace export; mirrors the chats/ naming (s<step>__<task>.json)."""
+        return self.exports_dir(run_id) / f"s{step_index}__{task_id}.json"
 
     def _manifest_path(self, run_id: str) -> Path:
         return self.run_dir(run_id) / "run.json"

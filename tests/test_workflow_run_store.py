@@ -61,10 +61,25 @@ def test_serialize_messages_shape():
         AIMessage(content="done"),
     ]
     out = serialize_messages(msgs)
-    assert out[0] == {"role": "human", "text": "do it"}
+    # The opening prompt of a workflow task is authored by the automated workflow, not a human.
+    assert out[0] == {"role": "task", "text": "do it"}
     assert out[1]["tool_calls"] == [{"name": "write_file", "args": {"path": "p"}}]
     assert out[2]["role"] == "tool" and out[2]["name"] == "write_file"
     assert out[3]["text"] == "done"
+
+
+def test_serialize_messages_relabels_only_first_human():
+    # Only the opening prompt becomes "task"; injected mid-turn human notes (skill activations,
+    # view-image blocks) keep the "human" role.
+    msgs = [
+        HumanMessage(content="the task prompt"),
+        AIMessage(content="thinking"),
+        HumanMessage(content="[Activated skill 'foo']"),
+        AIMessage(content="done"),
+    ]
+    out = serialize_messages(msgs)
+    assert out[0]["role"] == "task"
+    assert out[2]["role"] == "human"
 
 
 def test_capture_artifacts_copies_and_snapshots(atom_home):
