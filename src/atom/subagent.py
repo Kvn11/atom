@@ -64,6 +64,7 @@ class SubagentRunner:
     retry: Any = None                    # RetryPolicy | None; wired in Task 3 (child model retry/backoff)
     skill_catalog: list = field(default_factory=list)  # [{"name","description"}] always-on catalog
     has_skill_library: bool = False      # a skill_library/ exists -> bind search_skills
+    notes: dict | None = None            # per-workflow Logseq vault ctx (root_dir/graph); bash children only
 
     def __post_init__(self) -> None:
         self._sem = asyncio.Semaphore(clamp_concurrency(self.max_concurrent))
@@ -132,6 +133,9 @@ class SubagentRunner:
                 "outputs": VIRTUAL_OUTPUTS,
                 "frequent_tool_names": frequent,
                 "skill_catalog": list(self.skill_catalog),
+                # Only the bash prompt renders a notes block; general-purpose children have no bash
+                # and their file tools are workspace-confined, so they cannot reach the vault CLI.
+                "notes": self.notes,
             },
             self.config_dir,
         )

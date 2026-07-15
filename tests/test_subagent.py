@@ -91,6 +91,31 @@ def test_child_agent_has_skill_tools_and_catalog(atom_home):
     assert "logseq-cli" in sys and "Operate Logseq" in sys
 
 
+def test_bash_child_prompt_includes_notes_vault(atom_home):
+    from atom.subagent import SubagentRunner
+
+    runner = SubagentRunner(
+        model=None, home=str(atom_home), context_window=100_000, bash_enabled=True,
+        notes={"provider": "logseq", "root_dir": "/n/notes-smoke", "graph": "smoke-graph"},
+    )
+    bash_sys = runner._child_system("bash")
+    assert "Persistent notes" in bash_sys
+    assert "smoke-graph" in bash_sys and "/n/notes-smoke" in bash_sys
+    # General-purpose children have no bash and workspace-confined file tools, so they cannot reach
+    # the out-of-workspace vault via the logseq CLI -> they must NOT get a misleading vault block.
+    gp_sys = runner._child_system("general-purpose")
+    assert "Persistent notes" not in gp_sys and "smoke-graph" not in gp_sys
+
+
+def test_bash_child_prompt_omits_notes_block_when_absent(atom_home):
+    from atom.subagent import SubagentRunner
+
+    runner = SubagentRunner(
+        model=None, home=str(atom_home), context_window=100_000, bash_enabled=True,
+    )  # notes unset -> no vault block, template stays valid under StrictUndefined
+    assert "Persistent notes" not in runner._child_system("bash")
+
+
 def test_child_middleware_includes_skill_library_when_catalog(atom_home):
     from atom.middleware.skill_library import SkillLibraryMiddleware
     from atom.subagent import SubagentRunner

@@ -174,7 +174,7 @@ def build_lead_agent(
         mw_trace = trace
     middleware = _build_middlewares(
         cfg, profile, prepared, provider, home, summarizer, library, mw_trace,
-        skill_catalog=skill_catalog, retry_policy=retry_policy,
+        skill_catalog=skill_catalog, retry_policy=retry_policy, notes=notes,
     )
 
     return create_agent(
@@ -208,6 +208,7 @@ def _build_middlewares(
     *,
     skill_catalog: list[dict] | None = None,
     retry_policy=None,
+    notes: dict | None = None,
 ) -> list[AgentMiddleware]:
     # Local imports keep the ordered list readable and avoid import cycles.
     from atom.middleware.clarification import ClarificationMiddleware
@@ -263,6 +264,7 @@ def _build_middlewares(
         retry=policy,
         skill_catalog=skill_catalog or [],
         has_skill_library=library.has_skills,
+        notes=notes,   # bash children rendered vault-aware when the workflow enables notes
     )
     deferred_names = library.deferred_tool_names()
 

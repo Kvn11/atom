@@ -60,6 +60,56 @@ def test_lead_prompt_no_notes_block_when_absent(base_config):
     assert "Persistent notes" not in out
 
 
+def test_build_lead_agent_renders_notes_into_system_prompt(base_config, monkeypatch):
+    # Closes the seam between the render unit test (which bypasses build_lead_agent) and the
+    # engine-forwarding test (which spies on run_agent): prove build_lead_agent actually hands a
+    # vault-aware system prompt to create_agent, so deleting `notes=notes` at the render call fails.
+    import atom.agent as agent_mod
+    from atom.agent import build_lead_agent
+    from langchain_core.messages import AIMessage
+    from tests.conftest import make_prepared
+
+    captured: dict = {}
+    real_create = agent_mod.create_agent
+
+    def spy_create(*args, **kwargs):
+        captured["system_prompt"] = kwargs.get("system_prompt")
+        return real_create(*args, **kwargs)
+
+    monkeypatch.setattr(agent_mod, "create_agent", spy_create)
+    build_lead_agent(
+        base_config, "default", prepared=make_prepared([AIMessage(content="x")]),
+        notes={"provider": "logseq", "root_dir": "/n/vault-xyz", "graph": "graph-xyz"},
+    )
+    sp = captured["system_prompt"]
+    assert "Persistent notes" in sp
+    assert "/n/vault-xyz" in sp and "graph-xyz" in sp
+
+
+@pytest.mark.asyncio
+async def test_run_agent_forwards_notes_to_build_lead_agent(base_config, monkeypatch):
+    # The other half of the wire: run_agent must forward `notes` into build_lead_agent (a deletion
+    # at runtime.py's build_lead_agent call would otherwise pass every existing test).
+    import atom.runtime as rt
+    from atom.runtime import run_agent
+    from langchain_core.messages import AIMessage
+    from tests.conftest import make_prepared
+
+    captured: dict = {}
+    real_build = rt.build_lead_agent
+
+    def spy_build(*args, **kwargs):
+        captured["notes"] = kwargs.get("notes")
+        return real_build(*args, **kwargs)
+
+    monkeypatch.setattr(rt, "build_lead_agent", spy_build)
+    await run_agent(
+        "hi", config=base_config, prepared=make_prepared([AIMessage(content="done")]),
+        notes={"provider": "logseq", "root_dir": "/x", "graph": "demo"},
+    )
+    assert captured["notes"] == {"provider": "logseq", "root_dir": "/x", "graph": "demo"}
+
+
 def test_ask_clarification_is_return_direct():
     from atom.tools.clarification import ask_clarification
 
@@ -137,6 +187,7 @@ def test_subagent_prompts_render_and_report_contract():
         "outputs": "/o",
         "frequent_tool_names": ["read_file", "write_file"],
         "skill_catalog": [],
+        "notes": None,   # _child_system always supplies notes (None -> no vault block)
     }
     for ref in ("@prompts/subagent_general.md", "@prompts/subagent_bash.md"):
         out = render_prompt(ref, ctx)
