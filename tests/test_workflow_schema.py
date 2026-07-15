@@ -111,3 +111,57 @@ def test_resolve_inputs_treats_null_as_missing(atom_home):
     with pytest.raises(MissingInputError):
         resolve_inputs(wf, {"topic": None})          # required None -> missing
     assert resolve_inputs(wf, {"topic": "x", "style": None}) == {"topic": "x", "style": "free verse"}  # optional None -> default
+
+
+FILE_DEMO = """
+name: filedemo
+inputs:
+  - name: document
+    type: file
+    required: true
+  - name: notes
+    type: file
+    required: false
+steps:
+  - title: Read
+    tasks:
+      - id: t1
+        prompt: "summarize {{ document }}"
+"""
+
+
+def test_input_type_parses_file_and_defaults_text(atom_home):
+    _write(atom_home, "filedemo", FILE_DEMO)
+    wf = load_workflow("filedemo", str(atom_home))
+    by_name = {i.name: i for i in wf.inputs}
+    assert by_name["document"].type == "file"
+    assert by_name["notes"].type == "file"
+    # a workflow without a type: field stays text
+    _write(atom_home, "demo", DEMO)
+    wf2 = load_workflow("demo", str(atom_home))
+    assert all(i.type == "text" for i in wf2.inputs)
+
+
+def test_resolve_inputs_required_file_missing_raises(atom_home):
+    _write(atom_home, "filedemo", FILE_DEMO)
+    wf = load_workflow("filedemo", str(atom_home))
+    with pytest.raises(MissingInputError):
+        resolve_inputs(wf, {})                       # required file 'document' absent
+
+
+def test_resolve_inputs_file_path_used_optional_blank(atom_home):
+    _write(atom_home, "filedemo", FILE_DEMO)
+    wf = load_workflow("filedemo", str(atom_home))
+    resolved = resolve_inputs(wf, {"document": "/mnt/user-data/uploads/document.pdf"})
+    assert resolved["document"] == "/mnt/user-data/uploads/document.pdf"
+    assert resolved["notes"] == ""                   # optional file not provided -> ""
+
+
+def test_resolve_inputs_ignores_text_default_for_file_input():
+    wf = WorkflowDef.model_validate({
+        "name": "w",
+        "inputs": [{"name": "doc", "type": "file", "required": True, "default": "ignored.txt"}],
+        "steps": [{"title": "s", "tasks": [{"prompt": "{{ doc }}"}]}],
+    })
+    with pytest.raises(MissingInputError):        # default must NOT satisfy a required file input
+        resolve_inputs(wf, {})

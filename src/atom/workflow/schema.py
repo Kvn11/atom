@@ -18,6 +18,7 @@ class _Base(BaseModel):
 
 class InputDef(_Base):
     name: str
+    type: Literal["text", "file"] = "text"
     required: bool = False
     description: Optional[str] = None
     default: Optional[str] = None
@@ -113,7 +114,7 @@ def resolve_inputs(workflow: WorkflowDef, provided: dict) -> dict:
     for inp in workflow.inputs:
         if inp.name in provided and provided[inp.name] is not None and str(provided[inp.name]).strip() != "":
             resolved[inp.name] = provided[inp.name]
-        elif inp.default is not None:
+        elif inp.type != "file" and inp.default is not None:   # a text default is meaningless for a file input
             resolved[inp.name] = inp.default
         elif inp.required:
             missing.append(inp.name)
