@@ -107,9 +107,11 @@ atom workflow run summarize-doc --file document=~/report.txt
 ```
 
 The web UI renders a native file picker for any `type: file` input instead of a text box. Upload
-limits are configured under `uploads:` in `config.yaml` — `max_file_bytes` (default 25 MiB),
-`allowed_extensions` (empty allows any extension), and `max_files_per_run` — and are enforced on
-both the CLI and API upload paths. See `workflows/summarize-doc.yaml` for a complete example.
+limits are configured under `uploads:` in `config.yaml`: `max_file_bytes` (default 25 MiB) and
+`allowed_extensions` (empty allows any extension) are enforced on both the CLI and API upload
+paths, while `max_files_per_run` guards the API's multipart endpoint (the CLI `--file` path is
+naturally bounded by the workflow's declared file inputs). See `workflows/summarize-doc.yaml` for
+a complete example.
 
 ### Workflow queue
 

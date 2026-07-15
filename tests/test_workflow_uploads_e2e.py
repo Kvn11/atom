@@ -59,7 +59,7 @@ async def test_uploaded_file_readable_from_mount_and_path_resolved(base_config, 
     manifest = await engine.execute(run_id)
 
     assert manifest.status == "complete"
-    assert f"{UP}/document.txt" in captured["prompt"]          # {{ document }} resolved to the mount path
+    assert f"{UP}/document.txt" in captured["prompt"]          # Jinja substituted the file input's path (derivation itself is unit-tested in test_workflow_uploads.py)
     chat = engine.store.load_chat(run_id, 0, "t1")
     tool_texts = "\n".join(m["text"] for m in chat if m["role"] == "tool")
     assert "the tide returns" in tool_texts                    # agent read the file from the shared mount
