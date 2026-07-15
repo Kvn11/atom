@@ -85,6 +85,32 @@ across runs) and injects a snippet into each task's system prompt telling the ag
 is and to `load_skill("logseq-cli")` for the CLI commands. Try it with `workflows/notes-smoke.yaml`
 (run it twice — the second run recalls the first run's entry).
 
+### File inputs
+
+Declare a file input by giving it `type: file` alongside the usual `required`/`description`:
+
+```yaml
+inputs:
+  - name: document
+    type: file
+    required: true
+    description: The document to summarize (a text file).
+```
+
+Uploaded bytes are copied into the run's own uploads directory and shared with every task on a
+read-only mount; `{{ document }}` in a task `prompt` resolves to the mount path
+(`/mnt/user-data/uploads/document.<ext>`, extension taken from the uploaded file), so agents can
+`read_file` it like any other path. From the CLI, supply the file with `--file name=path`:
+
+```bash
+atom workflow run summarize-doc --file document=~/report.txt
+```
+
+The web UI renders a native file picker for any `type: file` input instead of a text box. Upload
+limits are configured under `uploads:` in `config.yaml` — `max_file_bytes` (default 25 MiB),
+`allowed_extensions` (empty allows any extension), and `max_files_per_run` — and are enforced on
+both the CLI and API upload paths. See `workflows/summarize-doc.yaml` for a complete example.
+
 ### Workflow queue
 
 Workflow invocations run through a durable, config-driven queue so they execute one at a time
