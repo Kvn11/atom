@@ -43,3 +43,19 @@ def test_queue_config_override():
     from atom.config.schema import QueueConfig
     qc = QueueConfig(max_concurrent_runs=3, poll_interval_seconds=0.5)
     assert qc.max_concurrent_runs == 3 and qc.poll_interval_seconds == 0.5
+
+
+def test_uploads_config_defaults():
+    from atom.config.schema import AtomConfig
+    cfg = AtomConfig()
+    assert cfg.uploads.max_file_bytes == 26_214_400
+    assert cfg.uploads.allowed_extensions == []
+    assert cfg.uploads.max_files_per_run == 20
+
+
+def test_uploads_config_override():
+    from atom.config.schema import UploadsConfig
+    uc = UploadsConfig(max_file_bytes=1024, allowed_extensions=["pdf", "txt"], max_files_per_run=3)
+    assert uc.max_file_bytes == 1024
+    assert uc.allowed_extensions == ["pdf", "txt"]
+    assert uc.max_files_per_run == 3

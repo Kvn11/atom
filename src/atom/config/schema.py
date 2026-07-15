@@ -74,6 +74,14 @@ class QueueConfig(_Base):
     max_drain_attempts: int = 5
 
 
+class UploadsConfig(_Base):
+    # Limits for workflow file-input uploads. The API is unauthenticated with open CORS, so
+    # these caps are the primary guard on an otherwise unbounded input surface.
+    max_file_bytes: int = 26_214_400        # 25 MiB per file
+    allowed_extensions: list[str] = Field(default_factory=list)  # empty = allow any; else lowercase, no dot
+    max_files_per_run: int = 20
+
+
 class RetryConfig(_Base):
     # Transient-provider-error retry for every model call (lead + sub-agents + summarizer).
     # 20 attempts with full-jitter exponential backoff, then the task fails.
@@ -141,6 +149,7 @@ class AtomConfig(_Base):
     library: LibraryConfig = Field(default_factory=LibraryConfig)
     workflow: WorkflowConfig = Field(default_factory=WorkflowConfig)
     queue: QueueConfig = Field(default_factory=QueueConfig)
+    uploads: UploadsConfig = Field(default_factory=UploadsConfig)
     retry: RetryConfig = Field(default_factory=RetryConfig)
     guardrails: GuardrailConfig = Field(default_factory=GuardrailConfig)
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
