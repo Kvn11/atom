@@ -254,13 +254,16 @@ async def test_html_artifact_served_as_attachment(base_config, atom_home):
         assert "attachment" in resp.headers.get("content-disposition", "")
 
 
-def test_inline_unsafe_covers_full_xml_family():
-    # html/svg were already blocked; the xml family (xhtml, mathml, rss, …) must be too — those
-    # render as active content on direct navigation.
+def test_inline_rendering_is_fail_closed_allowlist():
+    # Only the small allowlist (raster images, pdf, plain text/markdown/csv/json) renders inline on
+    # direct navigation. Active content — html, the whole xml family, svg — AND anything unknown or
+    # novel must download, so the guard can never silently fail open on a type nobody enumerated.
     for mt in ("text/html", "image/svg+xml", "application/xhtml+xml", "application/mathml+xml",
-               "application/xml", "text/xml", "application/rss+xml", "application/atom+xml"):
+               "application/xml", "text/xml", "application/rss+xml", "application/atom+xml",
+               "application/javascript", "application/x-shockwave-flash", "application/octet-stream"):
         assert _is_inline_unsafe(mt), mt
-    for mt in ("text/plain", "application/pdf", "image/png", "application/json", "text/markdown"):
+    for mt in ("text/plain", "text/markdown", "text/csv", "application/json", "application/pdf",
+               "image/png", "image/jpeg", "image/webp", "image/avif"):
         assert not _is_inline_unsafe(mt), mt
 
 

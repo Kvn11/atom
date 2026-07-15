@@ -34,18 +34,19 @@ def _now() -> str:
     return datetime.datetime.now().isoformat(timespec="seconds")
 
 
-# Media types a browser may render as active content (script/markup) on direct navigation. Anything
-# in this set — plus the whole ``*+xml`` family (xhtml, mathml, svg, atom, rss…) — is forced to
-# download rather than render inline. The SPA is unaffected: it fetches text via fetch().text() and
-# loads images via <img>/<iframe>, none of which honor Content-Disposition on a subresource.
-_INLINE_UNSAFE = {
-    "text/html", "application/xhtml+xml", "image/svg+xml",
-    "application/xml", "text/xml", "application/mathml+xml",
-}
+# Media types safe to render inline on direct navigation to a raw artifact URL. Everything else —
+# html, the whole ``*+xml`` family (xhtml/svg/mathml/atom/rss…), scripts, and unknown/mislabeled
+# bytes — is forced to download, so a novel active type can't execute inline without a code change
+# (fail closed). The SPA is unaffected either way: it reads text via fetch().text() and images via
+# <img>, neither of which honors Content-Disposition; only the PDF <iframe> honors it, so
+# application/pdf must stay inline-safe. Raster images are inert, so any ``image/*`` except SVG is safe.
+_INLINE_SAFE = {"application/pdf", "text/plain", "text/markdown", "text/csv", "application/json"}
 
 
 def _is_inline_unsafe(media_type: str) -> bool:
-    return media_type in _INLINE_UNSAFE or media_type.endswith("+xml")
+    if media_type == "image/svg+xml":              # SVG can carry <script> — never inline
+        return True
+    return not (media_type.startswith("image/") or media_type in _INLINE_SAFE)
 
 
 def _content_disposition(name: str) -> str:

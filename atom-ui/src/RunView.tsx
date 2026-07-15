@@ -18,7 +18,7 @@ const LANG: Record<string, string> = {
   sh: "bash", bash: "bash", zsh: "bash", go: "go", rs: "rust", rb: "ruby", java: "java",
   kt: "kotlin", c: "c", h: "c", cpp: "cpp", cc: "cpp", cxx: "cpp", hpp: "cpp", hh: "cpp",
   cs: "csharp", php: "php", swift: "swift", scala: "scala", sql: "sql", r: "r",
-  html: "xml", htm: "xml", xml: "xml", svg: "xml", vue: "xml", css: "css", scss: "scss",
+  html: "xml", htm: "xml", xml: "xml", vue: "xml", css: "css", scss: "scss",
   less: "less", diff: "diff", patch: "diff", dockerfile: "dockerfile", makefile: "makefile",
   graphql: "graphql", proto: "protobuf", tex: "latex",
 };
@@ -326,26 +326,30 @@ function ArtifactBody({ runId, art }: { runId: string; art: Artifact }) {
   return <CodeView name={art.name} text={text} href={raw} />;
 }
 
+// Its own component so toggling "Copied" re-renders only the button — never the (up to MAX_INLINE)
+// highlighted code body beside it, which react-markdown would otherwise re-tokenize on every toggle.
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    navigator.clipboard?.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1400);
+    }).catch(() => { /* clipboard unavailable */ });
+  };
+  return <button className="btn-sm" onClick={copy}>{copied ? "Copied ✓" : "Copy"}</button>;
+}
+
 // Whole-file source view: syntax-highlighted via the same rehype-highlight pipeline (language from
 // the file extension), with copy + download affordances. Rendered through a guarded code fence so
 // arbitrary file content can never break out into markdown.
 function CodeView({ name, text, href }: { name: string; text: string; href: string }) {
   const lang = langFor(name);
-  const [copied, setCopied] = useState(false);
-  const copy = () => {
-    navigator.clipboard?.writeText(text).then(() => setCopied(true)).catch(() => { /* clipboard unavailable */ });
-  };
-  useEffect(() => {
-    if (!copied) return;
-    const t = setTimeout(() => setCopied(false), 1400);
-    return () => clearTimeout(t);
-  }, [copied]);
   return (
     <div className="art-doc">
       <div className="art-doc-bar">
         <span className="art-lang">{lang === "plaintext" ? "text" : lang}</span>
         <span className="art-doc-spacer" />
-        <button className="btn-sm" onClick={copy}>{copied ? "Copied ✓" : "Copy"}</button>
+        <CopyButton text={text} />
         <a className="btn-sm" href={href} download>Download</a>
       </div>
       <div className="art-code-body">
