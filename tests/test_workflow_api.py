@@ -251,3 +251,99 @@ async def test_html_artifact_served_as_attachment(base_config, atom_home):
         resp = await client.get(f"/api/runs/{run_id}/artifacts/{rel}")
         assert resp.status_code == 200
         assert "attachment" in resp.headers.get("content-disposition", "")
+
+
+def _seed_filewf(home):
+    d = home / "workflows"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "docwf.yaml").write_text(
+        "name: docwf\n"
+        "inputs:\n"
+        "  - name: doc\n    type: file\n    required: true\n"
+        "  - name: extra\n    type: file\n    required: false\n"
+        "steps:\n  - title: Read\n    tasks:\n      - id: t1\n        prompt: \"summarize {{ doc }}\"\n"
+    )
+
+
+def _reader_provider(td, sd, wf):
+    return make_prepared([
+        AIMessage(content="", tool_calls=[{
+            "name": "read_file",
+            "args": {"description": "r", "path": "/mnt/user-data/uploads/doc.txt"},
+            "id": "c1", "type": "tool_call"}]),
+        AIMessage(content="done"),
+    ])
+
+
+@pytest.mark.asyncio
+async def test_multipart_upload_lands_and_run_completes(base_config, atom_home):
+    _seed_filewf(atom_home)
+    engine = WorkflowEngine(base_config, prepared_provider=_reader_provider)
+    app = create_app(base_config, engine=engine)
+    async with _client(app) as client:
+        r = await client.post(
+            "/api/runs",
+            data={"workflow": "docwf", "inputs": "{}"},
+            files={"doc": ("report.txt", b"the tide returns\n", "text/plain")},
+        )
+        assert r.status_code == 202
+        run_id = r.json()["run_id"]
+        manifest = await _poll(client, run_id)
+        assert manifest["status"] == "complete"
+        assert manifest["inputs"]["doc"] == "/mnt/user-data/uploads/doc.txt"
+        assert (engine.store.uploads_dir(run_id) / "doc.txt").read_bytes() == b"the tide returns\n"
+        msgs = (await client.get(f"/api/runs/{run_id}/tasks/0/t1/messages")).json()
+        assert any("the tide returns" in m["text"] for m in msgs if m["role"] == "tool")
+
+
+@pytest.mark.asyncio
+async def test_json_submit_still_works(base_config, atom_home):
+    _seed(atom_home)
+    engine = WorkflowEngine(base_config, prepared_provider=_provider)
+    app = create_app(base_config, engine=engine)
+    async with _client(app) as client:
+        r = await client.post("/api/runs", json={"workflow": "demo", "inputs": {"topic": "x"}})
+        assert r.status_code == 202 and r.json()["status"] == "queued"
+
+
+@pytest.mark.asyncio
+async def test_multipart_undeclared_file_field_is_400(base_config, atom_home):
+    _seed_filewf(atom_home)
+    app = create_app(base_config, engine=WorkflowEngine(base_config, prepared_provider=_reader_provider))
+    async with _client(app) as client:
+        r = await client.post("/api/runs", data={"workflow": "docwf", "inputs": "{}"},
+                              files={"ghost": ("x.txt", b"x", "text/plain")})
+        assert r.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_multipart_missing_required_file_is_422(base_config, atom_home):
+    _seed_filewf(atom_home)
+    app = create_app(base_config, engine=WorkflowEngine(base_config, prepared_provider=_reader_provider))
+    async with _client(app) as client:
+        # send only the optional 'extra' file -> required 'doc' absent
+        r = await client.post("/api/runs", data={"workflow": "docwf", "inputs": "{}"},
+                              files={"extra": ("notes.txt", b"x", "text/plain")})
+        assert r.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_multipart_oversize_is_413(base_config, atom_home):
+    _seed_filewf(atom_home)
+    base_config.uploads.max_file_bytes = 5
+    app = create_app(base_config, engine=WorkflowEngine(base_config, prepared_provider=_reader_provider))
+    async with _client(app) as client:
+        r = await client.post("/api/runs", data={"workflow": "docwf", "inputs": "{}"},
+                              files={"doc": ("report.txt", b"way too big", "text/plain")})
+        assert r.status_code == 413
+
+
+@pytest.mark.asyncio
+async def test_multipart_disallowed_extension_is_415(base_config, atom_home):
+    _seed_filewf(atom_home)
+    base_config.uploads.allowed_extensions = ["pdf"]
+    app = create_app(base_config, engine=WorkflowEngine(base_config, prepared_provider=_reader_provider))
+    async with _client(app) as client:
+        r = await client.post("/api/runs", data={"workflow": "docwf", "inputs": "{}"},
+                              files={"doc": ("report.txt", b"hello", "text/plain")})
+        assert r.status_code == 415

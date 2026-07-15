@@ -5,20 +5,25 @@ Automation flow: POST /api/runs (submit) -> poll GET /api/runs/{id} -> GET .../a
 from __future__ import annotations
 
 import datetime
+import json
 import mimetypes
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from starlette.datastructures import UploadFile
 
 from atom.api.models import ExportRequest, RunRequest
 from atom.config import load_config
 from atom.config.schema import AtomConfig
 from atom.workflow.engine import WorkflowEngine
 from atom.workflow.schema import MissingInputError, list_workflows, load_workflow
+from atom.workflow.uploads import (
+    UploadTooLarge, UploadTypeNotAllowed, check_extension, check_size, virtual_upload_path,
+)
 
 # atom-ui/dist lives at repo root: src/atom/api/app.py -> parents[3] == repo root.
 _UI_DIST = Path(__file__).resolve().parents[3] / "atom-ui" / "dist"
@@ -66,19 +71,76 @@ def create_app(cfg: AtomConfig | None = None, engine: WorkflowEngine | None = No
         except FileNotFoundError:
             raise HTTPException(404, f"workflow '{name}' not found")
 
+    def _create_and_enqueue(wf, inputs: dict, files: dict) -> dict:
+        # files: {input_name: (original_filename, data_bytes)}
+        run_id = uuid.uuid4().hex[:12]
+        merged = dict(inputs)
+        for name, (filename, _data) in files.items():
+            merged[name] = virtual_upload_path(name, filename)
+        try:
+            engine.create_run(wf, merged, run_id, _now())
+        except MissingInputError as exc:
+            raise HTTPException(422, str(exc))
+        for name, (filename, data) in files.items():
+            store.save_upload(run_id, name, filename, data)
+        engine.enqueue(run_id)
+        return {"run_id": run_id, "status": "queued"}
+
+    async def _submit_multipart(request: Request) -> dict:
+        form = await request.form()
+        workflow_name = form.get("workflow")
+        if not workflow_name:
+            raise HTTPException(422, "missing 'workflow' field")
+        raw_inputs = form.get("inputs")
+        try:
+            text_inputs = json.loads(raw_inputs) if raw_inputs else {}
+        except json.JSONDecodeError:
+            raise HTTPException(422, "'inputs' must be a JSON object")
+        if not isinstance(text_inputs, dict):
+            raise HTTPException(422, "'inputs' must be a JSON object")
+        try:
+            wf = load_workflow(workflow_name, cfg.home)
+        except FileNotFoundError:
+            raise HTTPException(404, f"workflow '{workflow_name}' not found")
+        file_input_names = {i.name for i in wf.inputs if i.type == "file"}
+
+        files: dict = {}
+        for key, value in form.multi_items():
+            if not isinstance(value, UploadFile):
+                continue
+            if key not in file_input_names:
+                raise HTTPException(400, f"'{key}' is not a declared file input of workflow '{workflow_name}'")
+            if key in files:
+                raise HTTPException(400, f"multiple files supplied for input '{key}'")
+            data = await value.read()
+            try:
+                check_size(len(data), cfg.uploads.max_file_bytes)
+                check_extension(value.filename or "", cfg.uploads.allowed_extensions)
+            except UploadTooLarge as exc:
+                raise HTTPException(413, str(exc))
+            except UploadTypeNotAllowed as exc:
+                raise HTTPException(415, str(exc))
+            files[key] = (value.filename or key, data)
+        if len(files) > cfg.uploads.max_files_per_run:
+            raise HTTPException(413, f"too many files ({len(files)} > {cfg.uploads.max_files_per_run})")
+        return _create_and_enqueue(wf, text_inputs, files)
+
     @app.post("/api/runs", status_code=202)
-    async def submit_run(req: RunRequest) -> dict:
+    async def submit_run(request: Request) -> dict:
+        ctype = request.headers.get("content-type", "")
+        if ctype.startswith("multipart/form-data"):
+            return await _submit_multipart(request)
+        # JSON path (backward-compatible).
+        try:
+            body = await request.json()
+            req = RunRequest.model_validate(body)
+        except Exception:  # noqa: BLE001 — malformed JSON body -> 422 like FastAPI's auto-validation
+            raise HTTPException(422, "invalid JSON body for RunRequest")
         try:
             wf = load_workflow(req.workflow, cfg.home)
         except FileNotFoundError:
             raise HTTPException(404, f"workflow '{req.workflow}' not found")
-        run_id = uuid.uuid4().hex[:12]
-        try:
-            engine.create_run(wf, req.inputs, run_id, _now())
-        except MissingInputError as exc:
-            raise HTTPException(422, str(exc))
-        engine.enqueue(run_id)
-        return {"run_id": run_id, "status": "queued"}
+        return _create_and_enqueue(wf, req.inputs, {})
 
     @app.get("/api/runs")
     def get_runs(status: str = "all", limit: int = 50, offset: int = 0) -> dict:
