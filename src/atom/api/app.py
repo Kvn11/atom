@@ -87,11 +87,16 @@ def create_app(cfg: AtomConfig | None = None, engine: WorkflowEngine | None = No
         return {"run_id": run_id, "status": "queued"}
 
     async def _submit_multipart(request: Request) -> dict:
-        form = await request.form()
+        try:
+            form = await request.form()
+        except Exception as exc:  # noqa: BLE001 — malformed/oversized multipart body -> 400, not 500
+            raise HTTPException(400, f"malformed multipart body: {type(exc).__name__}") from exc
         workflow_name = form.get("workflow")
-        if not workflow_name:
-            raise HTTPException(422, "missing 'workflow' field")
+        if not isinstance(workflow_name, str) or not workflow_name:
+            raise HTTPException(422, "missing or invalid 'workflow' field")
         raw_inputs = form.get("inputs")
+        if raw_inputs is not None and not isinstance(raw_inputs, str):
+            raise HTTPException(422, "'inputs' must be a JSON string field")
         try:
             text_inputs = json.loads(raw_inputs) if raw_inputs else {}
         except json.JSONDecodeError:
@@ -112,17 +117,22 @@ def create_app(cfg: AtomConfig | None = None, engine: WorkflowEngine | None = No
                 raise HTTPException(400, f"'{key}' is not a declared file input of workflow '{workflow_name}'")
             if key in files:
                 raise HTTPException(400, f"multiple files supplied for input '{key}'")
-            data = await value.read()
+            if len(files) + 1 > cfg.uploads.max_files_per_run:
+                raise HTTPException(413, f"too many files (> {cfg.uploads.max_files_per_run})")
             try:
-                check_size(len(data), cfg.uploads.max_file_bytes)
+                # Reject by size/type BEFORE reading the whole part into memory. Starlette
+                # populates UploadFile.size during multipart parsing; the post-read len() check
+                # is defense-in-depth for the rare case size is unavailable.
+                if value.size is not None:
+                    check_size(value.size, cfg.uploads.max_file_bytes)
                 check_extension(value.filename or "", cfg.uploads.allowed_extensions)
+                data = await value.read()
+                check_size(len(data), cfg.uploads.max_file_bytes)
             except UploadTooLarge as exc:
                 raise HTTPException(413, str(exc))
             except UploadTypeNotAllowed as exc:
                 raise HTTPException(415, str(exc))
             files[key] = (value.filename or key, data)
-        if len(files) > cfg.uploads.max_files_per_run:
-            raise HTTPException(413, f"too many files ({len(files)} > {cfg.uploads.max_files_per_run})")
         return _create_and_enqueue(wf, text_inputs, files)
 
     @app.post("/api/runs", status_code=202)

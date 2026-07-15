@@ -347,3 +347,26 @@ async def test_multipart_disallowed_extension_is_415(base_config, atom_home):
         r = await client.post("/api/runs", data={"workflow": "docwf", "inputs": "{}"},
                               files={"doc": ("report.txt", b"hello", "text/plain")})
         assert r.status_code == 415
+
+
+@pytest.mark.asyncio
+async def test_multipart_duplicate_file_for_input_is_400(base_config, atom_home):
+    _seed_filewf(atom_home)
+    app = create_app(base_config, engine=WorkflowEngine(base_config, prepared_provider=_reader_provider))
+    async with _client(app) as client:
+        r = await client.post(
+            "/api/runs",
+            data={"workflow": "docwf", "inputs": "{}"},
+            files=[("doc", ("a.txt", b"a", "text/plain")), ("doc", ("b.txt", b"b", "text/plain"))],
+        )
+        assert r.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_multipart_file_under_text_field_key_is_4xx(base_config, atom_home):
+    _seed_filewf(atom_home)
+    app = create_app(base_config, engine=WorkflowEngine(base_config, prepared_provider=_reader_provider))
+    async with _client(app) as client:
+        # a file uploaded under the 'workflow' form field must be a clean client error, not a 500
+        r = await client.post("/api/runs", files={"workflow": ("x.txt", b"x", "text/plain")})
+        assert 400 <= r.status_code < 500
