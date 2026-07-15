@@ -66,6 +66,9 @@ class WorkspaceContext(TypedDict, total=False):
     # external checkout at ``workspace_path``.
     workspace_mode: Literal["new", "existing"]
     workspace_path: Optional[str]
+    # Shared per-run uploads dir bound to /mnt/user-data/uploads (set for workflow runs). When
+    # absent, uploads resolves per-thread (chat/subagent runs).
+    uploads_path: Optional[str]
     # Capabilities/limits derived from the selected model's profile.
     allow_bash: bool
     supports_vision: bool

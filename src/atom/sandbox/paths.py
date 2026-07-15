@@ -81,23 +81,31 @@ def thread_paths(
     *,
     home: str | os.PathLike[str] | None = None,
     workspace_override: str | os.PathLike[str] | None = None,
+    uploads_override: str | os.PathLike[str] | None = None,
 ) -> ThreadPaths:
     """Compute :class:`ThreadPaths` for a thread.
 
     ``workspace_override`` (an absolute path) binds an *existing* external directory as the
     workspace (reuse mode); otherwise a fresh per-thread ``workspace/`` is used (new mode).
-    Directories are not created here — call :meth:`ThreadPaths.ensure`.
+    ``uploads_override`` (an absolute path) binds a shared external ``uploads/`` (per-run
+    uploads) instead of the per-thread default. Directories are not created here — call
+    :meth:`ThreadPaths.ensure`.
     """
     h = atom_home(home)
     base = h / "users" / user_id / "threads" / thread_id / "user-data"
     external = workspace_override is not None
     workspace = Path(workspace_override).expanduser().resolve() if external else base / "workspace"
+    uploads = (
+        Path(uploads_override).expanduser().resolve()
+        if uploads_override is not None
+        else base / "uploads"
+    )
     return ThreadPaths(
         home=h,
         user_id=user_id,
         thread_id=thread_id,
         workspace=workspace,
-        uploads=base / "uploads",
+        uploads=uploads,
         outputs=base / "outputs",
         skills=h / "skills",
         skill_library=h / "skill_library",
@@ -115,4 +123,5 @@ def thread_paths_from_context(ctx: dict, home_default: str | None = None) -> Thr
         ctx["thread_id"],
         home=ctx.get("home") or home_default,
         workspace_override=override,
+        uploads_override=ctx.get("uploads_path"),
     )

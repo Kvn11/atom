@@ -148,3 +148,25 @@ def test_existing_workspace_allowed_roots_enforced(atom_home, tmp_path):
     inside.mkdir()
     sb = provider.acquire(thread_paths("u", "g9", workspace_override=str(inside)))
     assert sb is not None
+
+
+def test_thread_paths_uploads_override(atom_home, tmp_path):
+    shared = tmp_path / "shared_uploads"
+    shared.mkdir()
+    tp = thread_paths("u", "tup", uploads_override=str(shared))
+    assert tp.uploads == shared.resolve()
+    assert tp.virtual_map()["/mnt/user-data/uploads"] == tp.uploads
+
+
+def test_thread_paths_uploads_default_is_per_thread(atom_home):
+    tp = thread_paths("u", "tnormal")
+    assert tp.uploads.name == "uploads"
+    assert "threads/tnormal" in str(tp.uploads)
+
+
+def test_sandbox_reads_from_overridden_uploads_mount(atom_home, tmp_path):
+    shared = tmp_path / "run_uploads"
+    shared.mkdir()
+    (shared / "doc.txt").write_text("hello from upload\n")
+    sb = LocalSandboxProvider().acquire(thread_paths("u", "tread", uploads_override=str(shared)))
+    assert sb.read_text("/mnt/user-data/uploads/doc.txt") == "hello from upload\n"

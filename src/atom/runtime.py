@@ -41,7 +41,7 @@ class RunResult:
         return self.state.get("title")
 
 
-def _build_context(cfg: AtomConfig, *, user_id, thread_id, profile_name, home, workspace, caps, window) -> WorkspaceContext:
+def _build_context(cfg: AtomConfig, *, user_id, thread_id, profile_name, home, workspace, caps, window, uploads=None) -> WorkspaceContext:
     if workspace in (None, "new"):
         mode, wpath = "new", None
     else:
@@ -53,6 +53,7 @@ def _build_context(cfg: AtomConfig, *, user_id, thread_id, profile_name, home, w
         "home": home,
         "workspace_mode": mode,
         "workspace_path": wpath,
+        "uploads_path": str(Path(uploads).expanduser().resolve()) if uploads else None,
         "allow_bash": cfg.sandbox.bash_enabled,
         "supports_vision": bool(caps.get("supports_vision")),
         "context_window": window,
@@ -79,6 +80,7 @@ async def run_agent(
     profile: str | None = None,
     thread_id: str | None = None,
     workspace: str = "new",
+    uploads: str | None = None,
     user_id: str | None = None,
     override_model: str | None = None,
     override_thinking: str | int | None = None,
@@ -106,6 +108,7 @@ async def run_agent(
         profile_name=profile_name,
         home=home,
         workspace=workspace,
+        uploads=uploads,
         caps=prepared.caps,
         window=prepared.context_window,
     )
