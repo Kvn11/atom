@@ -161,6 +161,7 @@ def workflow_list(config: str = typer.Option(None, "--config", "-c")) -> None:
 def workflow_run(
     name: str = typer.Argument(..., help="Workflow name."),
     input: list[str] = typer.Option(None, "--input", "-i", help="key=value (repeatable)."),
+    file: list[str] = typer.Option(None, "--file", "-f", help="name=path for a file input (repeatable)."),
     profile: str = typer.Option(None, "--profile", "-p"),
     config: str = typer.Option(None, "--config", "-c"),
 ) -> None:
@@ -169,6 +170,10 @@ def workflow_run(
 
     from atom.workflow.engine import WorkflowEngine
     from atom.workflow.schema import load_workflow, MissingInputError
+    from atom.workflow.uploads import (
+        UploadTooLarge, UploadTypeNotAllowed, check_extension, check_size, virtual_upload_path,
+    )
+    from pathlib import Path
 
     _load_env()
 
@@ -188,6 +193,32 @@ def workflow_run(
         raise typer.Exit(1)
 
     inputs = dict(kv.split("=", 1) for kv in (input or []) if "=" in kv)
+
+    # Parse + stage --file NAME=PATH tokens (bytes read now; written after the run dir exists).
+    file_input_names = {i.name for i in wf.inputs if i.type == "file"}
+    staged: dict[str, tuple[str, bytes]] = {}
+    for token in (file or []):
+        if "=" not in token:
+            console.print(f"[red]Error: --file must be NAME=PATH, got: {token}[/red]")
+            raise typer.Exit(1)
+        fname, fpath = token.split("=", 1)
+        p = Path(fpath).expanduser()
+        if fname not in file_input_names:
+            console.print(f"[red]Error: '{fname}' is not a file input of workflow '{name}'[/red]")
+            raise typer.Exit(1)
+        if not p.is_file():
+            console.print(f"[red]Error: file not found: {p}[/red]")
+            raise typer.Exit(1)
+        data = p.read_bytes()
+        try:
+            check_size(len(data), cfg.uploads.max_file_bytes)
+            check_extension(p.name, cfg.uploads.allowed_extensions)
+        except (UploadTooLarge, UploadTypeNotAllowed) as e:
+            console.print(f"[red]Error: {e}[/red]")
+            raise typer.Exit(1)
+        staged[fname] = (p.name, data)
+        inputs[fname] = virtual_upload_path(fname, p.name)
+
     engine = WorkflowEngine(cfg, profile=profile)
     run_id = uuid.uuid4().hex[:12]
 
@@ -196,6 +227,10 @@ def workflow_run(
     except MissingInputError as e:
         console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1)
+
+    for fname, (orig, data) in staged.items():
+        engine.store.save_upload(run_id, fname, orig, data)
+
     engine.enqueue(run_id)
 
     with console.status(f"[bold]running workflow {name}…[/bold]"):
