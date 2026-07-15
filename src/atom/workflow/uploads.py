@@ -7,6 +7,7 @@ compute the stored path before writing and it is guaranteed to match what save_u
 """
 from __future__ import annotations
 
+import hashlib
 import re
 from pathlib import PurePosixPath
 
@@ -38,8 +39,16 @@ def safe_extension(original_filename: str) -> str:
 
 
 def _sanitize_stem(input_name: str) -> str:
-    stem = _SAFE.sub("-", str(input_name or "").strip()).strip("-.")
-    return stem or "upload"
+    """Filesystem-safe stem for an input name. Injective: sanitization is lossy (distinct raw
+    names can reduce to the same safe stem), so whenever it changes the name we append a short
+    deterministic hash of the ORIGINAL name. This keeps clean identifiers clean (stem == raw ->
+    no suffix) while guaranteeing distinct input names never collide on disk."""
+    raw = str(input_name or "").strip()
+    stem = _SAFE.sub("-", raw).strip("-.") or "upload"
+    if stem != raw:
+        digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:8]
+        stem = f"{stem}-{digest}"
+    return stem
 
 
 def stored_name(input_name: str, original_filename: str) -> str:

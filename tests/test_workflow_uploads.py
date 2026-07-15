@@ -19,14 +19,26 @@ def test_safe_extension_cases():
 
 def test_stored_name_is_deterministic_and_collision_free():
     assert stored_name("doc", "q3-results.pdf") == "doc.pdf"
-    # distinct input names -> distinct stored names even with identical client filenames
     assert stored_name("a", "data.csv") == "a.csv"
     assert stored_name("b", "data.csv") == "b.csv"
+    # names that differ only in sanitized-away characters must NOT collide on disk
+    assert stored_name("a b", "x.txt") != stored_name("a-b", "x.txt")
+    assert stored_name("a!b", "x.txt") != stored_name("a-b", "x.txt")
+    assert stored_name("a b", "x.txt") != stored_name("a!b", "x.txt")
+    # deterministic
+    assert stored_name("a b", "x.txt") == stored_name("a b", "x.txt")
 
 
-def test_stored_name_sanitizes_and_falls_back():
-    assert stored_name("my input!", "x.txt") == "my-input.txt"
-    assert stored_name("", "x.txt") == "upload.txt"
+def test_stored_name_sanitizes_and_disambiguates_lossy_names():
+    # a clean identifier stays clean (no hash suffix)
+    assert stored_name("document", "x.txt") == "document.txt"
+    assert stored_name("a-b", "x.txt") == "a-b.txt"
+    # a lossy name is sanitized AND gets a deterministic hash suffix so it can't collide
+    a = stored_name("my input!", "x.txt")
+    assert a.startswith("my-input-") and a.endswith(".txt")
+    assert a == stored_name("my input!", "x.txt")     # deterministic
+    # empty/degenerate falls back to an 'upload' stem
+    assert stored_name("", "x.txt").startswith("upload")
 
 
 def test_virtual_upload_path():
