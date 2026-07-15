@@ -110,7 +110,9 @@ class WorkflowEngine:
         manifest = RunManifest(
             run_id=run_id, workflow=workflow.name, inputs=resolved,
             created_at=created_at or _now(),
-            workspace_path=str(self.store.workspace_dir(run_id)), steps=steps,
+            workspace_path=str(self.store.workspace_dir(run_id)),
+            uploads_path=str(self.store.uploads_dir(run_id)),
+            steps=steps,
         )
         self._defs[run_id] = workflow
         return self.store.create(manifest)
@@ -394,8 +396,8 @@ class WorkflowEngine:
             coro = run_agent(
                 prompt, config=self._task_cfg, profile=self.profile,
                 override_model=td.model, override_thinking=td.thinking,
-                workspace=manifest.workspace_path, thread_id=ts.thread_id,
-                trace=trace, prepared=prepared,
+                workspace=manifest.workspace_path, uploads=manifest.uploads_path,
+                thread_id=ts.thread_id, trace=trace, prepared=prepared,
                 notes=notes.as_prompt_ctx() if notes else None,
             )
             result = await (asyncio.wait_for(coro, timeout) if timeout else coro)

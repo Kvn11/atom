@@ -512,3 +512,27 @@ async def test_initial_manifest_load_failure_logs_and_reraises(base_config, atom
         with pytest.raises(OSError):
             await engine.execute("run_missing")
     assert any("failed to load manifest" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_create_run_sets_uploads_path(base_config, atom_home):
+    engine = WorkflowEngine(base_config)
+    m = engine.create_run(_one_task_wf(), {"topic": "sea"}, "run_up", "2026-07-15T00:00:00")
+    assert m.uploads_path == str(engine.store.uploads_dir("run_up"))
+    assert engine.store.load("run_up").uploads_path == str(engine.store.uploads_dir("run_up"))
+
+
+@pytest.mark.asyncio
+async def test_run_task_forwards_uploads_to_run_agent(base_config, atom_home, monkeypatch):
+    from atom.runtime import RunResult
+    captured = {}
+
+    async def spy(prompt, **kwargs):
+        captured["uploads"] = kwargs.get("uploads")
+        return RunResult(thread_id=kwargs.get("thread_id", "t"), messages=[], final_text="ok", state={})
+
+    monkeypatch.setattr(engine_mod, "run_agent", spy)
+    engine = WorkflowEngine(base_config)
+    engine.create_run(_one_task_wf(), {"topic": "sea"}, "run_upfwd", "2026-07-15T00:00:00")
+    await engine.execute("run_upfwd")
+    assert captured["uploads"] == str(engine.store.uploads_dir("run_upfwd"))
