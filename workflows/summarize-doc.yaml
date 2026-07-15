@@ -1,0 +1,14 @@
+name: summarize-doc
+description: Summarize an uploaded document.
+inputs:
+  - name: document
+    type: file
+    required: true
+    description: The document to summarize (a text file).
+steps:
+  - title: Summarize
+    tasks:
+      - id: summarizer
+        prompt: |
+          Read the uploaded document at {{ document }}, then write a concise summary to
+          {{ outputs }}/summary.md and present it with present_files.
