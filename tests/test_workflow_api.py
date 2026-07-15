@@ -3,13 +3,14 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
+from urllib.parse import quote
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 from langchain_core.messages import AIMessage
 
 import atom.observability.export as export_mod
-from atom.api.app import create_app
+from atom.api.app import _content_disposition, _is_inline_unsafe, create_app
 from atom.observability.export import ExportResult
 from atom.workflow.engine import WorkflowEngine
 from tests.conftest import make_prepared
@@ -251,6 +252,26 @@ async def test_html_artifact_served_as_attachment(base_config, atom_home):
         resp = await client.get(f"/api/runs/{run_id}/artifacts/{rel}")
         assert resp.status_code == 200
         assert "attachment" in resp.headers.get("content-disposition", "")
+
+
+def test_inline_unsafe_covers_full_xml_family():
+    # html/svg were already blocked; the xml family (xhtml, mathml, rss, …) must be too — those
+    # render as active content on direct navigation.
+    for mt in ("text/html", "image/svg+xml", "application/xhtml+xml", "application/mathml+xml",
+               "application/xml", "text/xml", "application/rss+xml", "application/atom+xml"):
+        assert _is_inline_unsafe(mt), mt
+    for mt in ("text/plain", "application/pdf", "image/png", "application/json", "text/markdown"):
+        assert not _is_inline_unsafe(mt), mt
+
+
+def test_content_disposition_is_header_injection_safe():
+    # A double-quote, backslash, or CR/LF in an artifact name must never break the quoted-string
+    # or inject a second header line; the exact name survives in the percent-encoded filename*.
+    name = 'a"\\\r\nb résumé.svg'
+    cd = _content_disposition(name)
+    assert "\r" not in cd and "\n" not in cd                       # no header/line injection
+    assert cd.startswith('attachment; filename="ab rsum.svg"')     # quote/backslash/ctrl/non-ascii stripped from fallback
+    assert cd.endswith("filename*=UTF-8''" + quote(name, safe=""))  # exact name preserved, percent-encoded
 
 
 def _seed_filewf(home):

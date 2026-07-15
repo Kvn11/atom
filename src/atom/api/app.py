@@ -10,6 +10,7 @@ import mimetypes
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -31,6 +32,31 @@ _UI_DIST = Path(__file__).resolve().parents[3] / "atom-ui" / "dist"
 
 def _now() -> str:
     return datetime.datetime.now().isoformat(timespec="seconds")
+
+
+# Media types a browser may render as active content (script/markup) on direct navigation. Anything
+# in this set — plus the whole ``*+xml`` family (xhtml, mathml, svg, atom, rss…) — is forced to
+# download rather than render inline. The SPA is unaffected: it fetches text via fetch().text() and
+# loads images via <img>/<iframe>, none of which honor Content-Disposition on a subresource.
+_INLINE_UNSAFE = {
+    "text/html", "application/xhtml+xml", "image/svg+xml",
+    "application/xml", "text/xml", "application/mathml+xml",
+}
+
+
+def _is_inline_unsafe(media_type: str) -> bool:
+    return media_type in _INLINE_UNSAFE or media_type.endswith("+xml")
+
+
+def _content_disposition(name: str) -> str:
+    """Build an RFC 6266 ``attachment`` header value that is injection-safe for any filename.
+
+    The ``filename="..."`` fallback is stripped of quotes, backslashes and non-printable bytes (so a
+    name containing ``"`` or CR/LF cannot break out of the quoted-string or inject a header), and a
+    percent-encoded ``filename*`` carries the exact (possibly non-ASCII) name for capable clients.
+    """
+    ascii_fallback = "".join(c for c in name if c.isascii() and c.isprintable() and c not in '"\\') or "download"
+    return f"attachment; filename=\"{ascii_fallback}\"; filename*=UTF-8''{quote(name, safe='')}"
 
 
 def create_app(cfg: AtomConfig | None = None, engine: WorkflowEngine | None = None) -> FastAPI:
@@ -228,11 +254,9 @@ def create_app(cfg: AtomConfig | None = None, engine: WorkflowEngine | None = No
             raise HTTPException(404, "artifact not found")
         media_type = mimetypes.guess_type(target.name)[0] or "text/plain"
         # Script-capable types must not render inline on direct navigation (defense-in-depth).
-        # The SPA is unaffected: it fetches text via JS (fetch().text()) and loads images via
-        # <img>, neither of which honors Content-Disposition on a subresource.
         headers = None
-        if media_type in ("text/html", "image/svg+xml"):
-            headers = {"Content-Disposition": f'attachment; filename="{target.name}"'}
+        if _is_inline_unsafe(media_type):
+            headers = {"Content-Disposition": _content_disposition(target.name)}
         return FileResponse(target, media_type=media_type, headers=headers)
 
     if _UI_DIST.is_dir():  # serve the built SPA when present (prod); tests hit /api only

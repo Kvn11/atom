@@ -1,11 +1,59 @@
 import { useEffect, useState } from "react";
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import rehypeHighlight from "rehype-highlight";
 import { api, artifactUrl, Artifact, ChatMsg, Manifest } from "./api";
 import { Dot, StatusPill, elapsed, fmtSize } from "./ui";
 
-const IMG = /\.(png|jpe?g|gif|webp|svg|bmp)$/i;
+const IMG = /\.(png|jpe?g|gif|webp|svg|bmp|avif|apng|jfif|ico)$/i;
 const MD = /\.(md|markdown)$/i;
+const PDF = /\.pdf$/i;
+const MAX_INLINE = 2_000_000; // bytes — larger deliverables get a download card instead of inline render
+
+// highlight.js language keyed by file extension; unknown/plain text falls back to "plaintext" (no tokens).
+const LANG: Record<string, string> = {
+  py: "python", pyi: "python", js: "javascript", mjs: "javascript", cjs: "javascript",
+  jsx: "javascript", ts: "typescript", tsx: "typescript", json: "json", jsonc: "json",
+  yaml: "yaml", yml: "yaml", toml: "ini", ini: "ini", cfg: "ini", conf: "ini", env: "bash",
+  sh: "bash", bash: "bash", zsh: "bash", go: "go", rs: "rust", rb: "ruby", java: "java",
+  kt: "kotlin", c: "c", h: "c", cpp: "cpp", cc: "cpp", cxx: "cpp", hpp: "cpp", hh: "cpp",
+  cs: "csharp", php: "php", swift: "swift", scala: "scala", sql: "sql", r: "r",
+  html: "xml", htm: "xml", xml: "xml", svg: "xml", vue: "xml", css: "css", scss: "scss",
+  less: "less", diff: "diff", patch: "diff", dockerfile: "dockerfile", makefile: "makefile",
+  graphql: "graphql", proto: "protobuf", tex: "latex",
+};
+
+function extOf(name: string): string {
+  const base = name.slice(name.lastIndexOf("/") + 1).toLowerCase();
+  if (base === "dockerfile" || base === "makefile") return base;
+  const dot = base.lastIndexOf(".");
+  return dot > 0 ? base.slice(dot + 1) : "";
+}
+
+const langFor = (name: string): string => LANG[extOf(name)] ?? "plaintext";
+
+// Wrap raw file text in a fenced code block whose fence is longer than any backtick run inside it,
+// so the file's own content can never terminate the fence early (safe; nothing leaks to markdown).
+function asFence(code: string, lang: string): string {
+  const longest = (code.match(/`+/g) ?? []).reduce((m, s) => Math.max(m, s.length), 0);
+  const fence = "`".repeat(Math.max(3, longest + 1));
+  return `${fence}${lang}\n${code}\n${fence}`;
+}
+
+// A NUL byte or Unicode replacement char is a strong signal the fetched bytes weren't UTF-8 text
+// (e.g. a PDF/zip/office doc presented as a deliverable) — show a download card, not mojibake.
+const looksBinary = (text: string): boolean => /[\u0000\uFFFD]/.test(text.slice(0, 4096));
+
+// Open external links in a new tab safely; leave in-app/relative links as default anchors.
+const mdComponents: Components = {
+  a: ({ href, children, ...props }) => {
+    const external = !!href && /^https?:\/\//i.test(href);
+    return (
+      <a href={href} target={external ? "_blank" : undefined}
+        rel={external ? "noopener noreferrer" : undefined} {...props}>{children}</a>
+    );
+  },
+};
 
 type Sel = { step: number; task: string };
 
@@ -245,19 +293,76 @@ function Deliverables(
 function ArtifactBody({ runId, art }: { runId: string; art: Artifact }) {
   const isImg = IMG.test(art.name);
   const isMd = MD.test(art.name);
+  const isPdf = PDF.test(art.name);
+  const raw = artifactUrl(runId, art.rel);
+  const tooBig = art.size > MAX_INLINE;
   const [text, setText] = useState<string | null>(null);
   const [err, setErr] = useState("");
   useEffect(() => {
-    if (isImg) return;
+    if (isImg || isPdf || tooBig) return;             // images/pdf stream via <img>/<iframe>; huge files aren't inlined
     let live = true;
     setText(null); setErr("");
     api.artifactText(runId, art.rel).then((t) => { if (live) setText(t); }).catch((e) => { if (live) setErr(String(e)); });
     return () => { live = false; };
-  }, [runId, art.rel, isImg]);
+  }, [runId, art.rel, isImg, isPdf, tooBig]);
 
-  if (isImg) return <div className="art-img"><img src={artifactUrl(runId, art.rel)} alt={art.name} /></div>;
+  if (isImg) return <div className="art-img"><img src={raw} alt={art.name} /></div>;
+  if (isPdf) return <iframe className="art-pdf" src={raw} title={art.name} />;
+  if (tooBig) return <DownloadCard art={art} href={raw} note={`Large file (${fmtSize(art.size)}) — not shown inline.`} />;
   if (err) return <div className="error">{err}</div>;
   if (text === null) return <div className="placeholder">Loading…</div>;
-  if (isMd) return <div className="art-md"><ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown></div>;
-  return <pre className="art-code">{text}</pre>;
+  if (looksBinary(text)) return <DownloadCard art={art} href={raw} note="Binary file — download to view." />;
+  if (isMd) return (
+    <div className="art-md">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        rehypePlugins={[[rehypeHighlight, { detect: true, ignoreMissing: true }]]}
+        components={mdComponents}
+      >
+        {text}
+      </ReactMarkdown>
+    </div>
+  );
+  return <CodeView name={art.name} text={text} href={raw} />;
+}
+
+// Whole-file source view: syntax-highlighted via the same rehype-highlight pipeline (language from
+// the file extension), with copy + download affordances. Rendered through a guarded code fence so
+// arbitrary file content can never break out into markdown.
+function CodeView({ name, text, href }: { name: string; text: string; href: string }) {
+  const lang = langFor(name);
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    navigator.clipboard?.writeText(text).then(() => setCopied(true)).catch(() => { /* clipboard unavailable */ });
+  };
+  useEffect(() => {
+    if (!copied) return;
+    const t = setTimeout(() => setCopied(false), 1400);
+    return () => clearTimeout(t);
+  }, [copied]);
+  return (
+    <div className="art-doc">
+      <div className="art-doc-bar">
+        <span className="art-lang">{lang === "plaintext" ? "text" : lang}</span>
+        <span className="art-doc-spacer" />
+        <button className="btn-sm" onClick={copy}>{copied ? "Copied ✓" : "Copy"}</button>
+        <a className="btn-sm" href={href} download>Download</a>
+      </div>
+      <div className="art-code-body">
+        <ReactMarkdown rehypePlugins={[[rehypeHighlight, { detect: false, ignoreMissing: true }]]}>
+          {asFence(text, lang)}
+        </ReactMarkdown>
+      </div>
+    </div>
+  );
+}
+
+function DownloadCard({ art, href, note }: { art: Artifact; href: string; note: string }) {
+  return (
+    <div className="art-download">
+      <div className="art-download-name">{art.name}</div>
+      <div className="art-download-note">{note}</div>
+      <a className="primary art-download-btn" href={href} download>Download ({fmtSize(art.size)})</a>
+    </div>
+  );
 }
