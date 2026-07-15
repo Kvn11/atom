@@ -29,11 +29,12 @@ export function RunForm(
   { workflow: Workflow; onStarted: (id: string) => void; onBack: () => void },
 ) {
   const [values, setValues] = useState<Record<string, string>>({});
+  const [files, setFiles] = useState<Record<string, File>>({});
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const submit = async () => {
     setError(""); setBusy(true);
-    try { const { run_id } = await api.submit(workflow.name, values); onStarted(run_id); }
+    try { const { run_id } = await api.submit(workflow.name, values, files); onStarted(run_id); }
     catch (e) { setError(String(e instanceof Error ? e.message : e)); setBusy(false); }
   };
   return (
@@ -45,8 +46,20 @@ export function RunForm(
         <label key={i.name} className="field">
           <span className="field-label">{i.name}{i.required && <span className="req">required</span>}</span>
           {i.description && <span className="field-hint">{i.description}</span>}
-          <input placeholder={i.default ?? ""} value={values[i.name] ?? ""}
-            onChange={(e) => setValues((v) => ({ ...v, [i.name]: e.target.value }))} />
+          {i.type === "file" ? (
+            <input type="file"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                setFiles((prev) => {
+                  const next = { ...prev };
+                  if (f) next[i.name] = f; else delete next[i.name];
+                  return next;
+                });
+              }} />
+          ) : (
+            <input placeholder={i.default ?? ""} value={values[i.name] ?? ""}
+              onChange={(e) => setValues((v) => ({ ...v, [i.name]: e.target.value }))} />
+          )}
         </label>
       ))}
       <button className="primary" disabled={busy} onClick={submit}>{busy ? "Starting…" : "Start run"}</button>

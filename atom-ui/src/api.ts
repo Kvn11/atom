@@ -1,4 +1,4 @@
-export interface InputDef { name: string; required: boolean; description?: string; default?: string; }
+export interface InputDef { name: string; type?: "text" | "file"; required: boolean; description?: string; default?: string; }
 export interface Workflow { name: string; description?: string; inputs: InputDef[]; }
 export interface ArtifactRef { name: string; path: string; rel: string; size: number; }
 export interface TaskState {
@@ -32,11 +32,24 @@ export const artifactUrl = (id: string, rel: string) =>
 
 export const api = {
   workflows: (): Promise<Workflow[]> => fetch("/api/workflows").then(j),
-  submit: (workflow: string, inputs: Record<string, string>): Promise<{ run_id: string }> =>
-    fetch("/api/runs", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ workflow, inputs }),
-    }).then(j),
+  submit: (
+    workflow: string,
+    inputs: Record<string, string>,
+    files?: Record<string, File>,
+  ): Promise<{ run_id: string }> => {
+    const fileEntries = files ? Object.entries(files) : [];
+    if (fileEntries.length === 0) {
+      return fetch("/api/runs", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workflow, inputs }),
+      }).then(j);
+    }
+    const fd = new FormData();
+    fd.append("workflow", workflow);
+    fd.append("inputs", JSON.stringify(inputs));
+    for (const [name, file] of fileEntries) fd.append(name, file);
+    return fetch("/api/runs", { method: "POST", body: fd }).then(j);  // browser sets multipart boundary
+  },
   runs: (status: string, limit: number, offset: number, signal?: AbortSignal): Promise<RunsPage> =>
     fetch(`/api/runs?status=${status}&limit=${limit}&offset=${offset}`, { signal }).then(j),
   run: (id: string): Promise<Manifest> => fetch(`/api/runs/${id}`).then(j),
