@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 
 from atom.messages import message_text
 from atom.sandbox.paths import atom_home
+from atom.workflow.uploads import stored_name, virtual_upload_path
 
 
 _ACTIVE = ("pending", "queued", "running")
@@ -51,6 +52,7 @@ class RunManifest(BaseModel):
     enqueued_at: Optional[str] = None  # microsecond-precision; primary FIFO sort key
     ended_at: Optional[str] = None
     workspace_path: str
+    uploads_path: Optional[str] = None
     steps: list[StepState] = Field(default_factory=list)
 
 
@@ -127,6 +129,9 @@ class RunStore:
     def workspace_dir(self, run_id: str) -> Path:
         return self.run_dir(run_id) / "workspace"
 
+    def uploads_dir(self, run_id: str) -> Path:
+        return self.run_dir(run_id) / "uploads"
+
     def artifacts_dir(self, run_id: str) -> Path:
         return self.run_dir(run_id) / "artifacts"
 
@@ -142,9 +147,21 @@ class RunStore:
 
     def create(self, manifest: RunManifest) -> RunManifest:
         self.workspace_dir(manifest.run_id).mkdir(parents=True, exist_ok=True)
+        self.uploads_dir(manifest.run_id).mkdir(parents=True, exist_ok=True)
         (self.run_dir(manifest.run_id) / "chats").mkdir(parents=True, exist_ok=True)
         self.save(manifest)
         return manifest
+
+    def save_upload(self, run_id: str, input_name: str, original_filename: str, data: bytes) -> str:
+        """Write an uploaded file's bytes into the run's uploads dir and return its virtual path.
+
+        The on-disk name comes from uploads.stored_name(input_name, ...) so it is deterministic
+        and equals uploads.virtual_upload_path (what the caller stores in RunManifest.inputs).
+        """
+        d = self.uploads_dir(run_id)
+        d.mkdir(parents=True, exist_ok=True)
+        (d / stored_name(input_name, original_filename)).write_bytes(data)
+        return virtual_upload_path(input_name, original_filename)
 
     def _summary_path(self, run_id: str) -> Path:
         return self.run_dir(run_id) / "summary.json"

@@ -219,3 +219,26 @@ def test_queued_run_ids_fifo_and_interrupted(atom_home):
 
     assert store.queued_run_ids() == ["a", "b"]           # FIFO by enqueued_at
     assert set(store.interrupted_run_ids()) == {"mid", "new"}
+
+
+def test_uploads_dir_created_by_create(atom_home):
+    store = RunStore(str(atom_home))
+    store.create(_manifest("ru", store.workspace_dir("ru")))
+    assert store.uploads_dir("ru") == store.run_dir("ru") / "uploads"
+    assert store.uploads_dir("ru").is_dir()
+
+
+def test_save_upload_deterministic_name_and_virtual_path(atom_home):
+    store = RunStore(str(atom_home))
+    store.create(_manifest("rup", store.workspace_dir("rup")))
+    vpath = store.save_upload("rup", "document", "q3-results.pdf", b"PDFDATA")
+    assert vpath == "/mnt/user-data/uploads/document.pdf"
+    assert (store.uploads_dir("rup") / "document.pdf").read_bytes() == b"PDFDATA"
+
+
+def test_manifest_uploads_path_roundtrips(atom_home):
+    store = RunStore(str(atom_home))
+    m = _manifest("rpp", store.workspace_dir("rpp"))
+    m.uploads_path = str(store.uploads_dir("rpp"))
+    store.create(m)
+    assert store.load("rpp").uploads_path == str(store.uploads_dir("rpp"))
