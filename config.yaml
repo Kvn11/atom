@@ -48,6 +48,11 @@ observability:
   default_tags: []          # tags added to every workflow run
   include_prompt_fingerprint: true   # correlate a prompt version with run outcomes
   capture_git_sha: true
+  # provider: langfuse            # langsmith | langfuse | none (default: none)
+  # langfuse:
+  #   host: ${LANGFUSE_HOST}
+  #   public_key: ${LANGFUSE_PUBLIC_KEY}
+  #   secret_key: ${LANGFUSE_SECRET_KEY}
 
 track_usage: true
 
