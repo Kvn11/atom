@@ -51,14 +51,14 @@ def build_envelope(
     run_id: str, workflow: str, project: str, manifest: RunManifest, roots: list[dict],
     *, complete: bool, expected: int, fetched: int, now: str,
     task_id: str | None = None, session_id: str | None = None,
+    provider: str = "langsmith", sdk_version: str | None = None,
 ) -> dict:
-    """The on-disk export: a thin, self-describing wrapper around the raw LangSmith trees.
+    """The on-disk export: a thin, self-describing wrapper around the raw provider trees.
 
     ``scope`` is ``"task"`` when ``task_id`` is given (a single task's tree, keyed by ``session_id``),
-    else ``"run"`` (the whole run). The full manifest is embedded either way for context.
+    else ``"run"``. ``provider`` records which backend produced ``roots`` (their shape differs:
+    LangSmith Run dicts vs LangFuse trace+observation dicts). The full manifest is embedded either way.
     """
-    import langsmith
-
     return {
         "run_id": run_id,
         "workflow": workflow,
@@ -67,13 +67,22 @@ def build_envelope(
         "task_id": task_id,
         "session_id": session_id,
         "exported_at": now,
-        "langsmith_sdk": getattr(langsmith, "__version__", None),
+        "provider": provider,
+        "sdk_version": sdk_version,
         "complete": complete,
         "expected_roots": expected,
         "fetched_roots": fetched,
         "atom_manifest": manifest.model_dump(mode="json"),
         "roots": roots,
     }
+
+
+def _langsmith_sdk_version() -> str | None:
+    try:
+        import langsmith
+        return getattr(langsmith, "__version__", None)
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _default_client() -> Any:
@@ -156,6 +165,7 @@ def export_run(
     envelope = build_envelope(
         run_id, manifest.workflow, project, manifest, roots,
         complete=complete, expected=expected, fetched=fetched, now=now(),
+        provider="langsmith", sdk_version=_langsmith_sdk_version(),
     )
     path = store.run_dir(run_id) / "export.json"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -231,6 +241,7 @@ def export_task(
         run_id, manifest.workflow, project, manifest, roots,
         complete=True, expected=1, fetched=fetched, now=now(),
         task_id=task_id, session_id=session_id,
+        provider="langsmith", sdk_version=_langsmith_sdk_version(),
     )
     path = store.task_export_path(run_id, step_index, task_id)
     path.parent.mkdir(parents=True, exist_ok=True)

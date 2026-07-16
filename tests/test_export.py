@@ -68,6 +68,22 @@ def test_build_envelope_task_scope():
     assert env["task_id"] == "t0" and env["session_id"] == "r1:s0:t0"
 
 
+def test_build_envelope_records_provider_and_sdk():
+    m = _manifest("r1", ["succeeded"])
+    env = build_envelope(
+        "r1", "wf", "proj", m, [{"id": "root1"}],
+        complete=True, expected=1, fetched=1, now="t",
+        provider="langfuse", sdk_version="3.1.0",
+    )
+    assert env["provider"] == "langfuse" and env["sdk_version"] == "3.1.0"
+
+
+def test_build_envelope_defaults_to_langsmith():
+    m = _manifest("r1", ["succeeded"])
+    env = build_envelope("r1", "wf", "proj", m, [], complete=True, expected=1, fetched=1, now="t")
+    assert env["provider"] == "langsmith"
+
+
 def test_export_result_is_a_dataclass():
     r = ExportResult(run_id="r1", path="/x/export.json", complete=True,
                      expected_roots=1, fetched_roots=1)
