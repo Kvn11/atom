@@ -38,8 +38,8 @@ def _default_client() -> Any:
 
 def _langfuse_sdk_version() -> str | None:
     try:
-        import langfuse
-        return getattr(langfuse, "__version__", None)
+        from importlib.metadata import version
+        return version("langfuse")
     except Exception:  # noqa: BLE001
         return None
 
@@ -87,7 +87,7 @@ def fetch_session_traces(client: Any, run_id: str) -> list[dict]:
         if not items:
             break
         for it in items:
-            full = client.api.trace.get(_item_id(it), fields="core,io,observations")
+            full = client.api.trace.get(_item_id(it))
             trees.append(_as_dict(full))
         page += 1
     return trees

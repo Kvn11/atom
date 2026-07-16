@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import datetime
+import inspect
 import json
+import re
 from pathlib import Path
 
 import pytest
+from langfuse import Langfuse
 
 from atom.observability.langfuse_export import export_run, export_task, fetch_session_traces
 from atom.workflow.run_store import RunManifest, RunStore, StepState, TaskState
@@ -54,8 +57,7 @@ class _FakeAPI:
             self._o.list_calls += 1
             idx = page - 1
             return _Page(self._o._pages[idx] if idx < len(self._o._pages) else [])
-        def get(self, trace_id, fields):
-            assert "observations" in fields
+        def get(self, trace_id):
             return self._o._by_id[trace_id]
 
     @property
@@ -181,3 +183,36 @@ def test_export_run_serializes_trace_dumped_in_json_mode(atom_home, monkeypatch)
     assert result.complete is True and result.fetched_roots == 1
     env = json.loads(Path(result.path).read_text())               # would raise if not JSON-safe
     assert env["roots"][0]["timestamp"] == "2026-07-16T00:00:00"
+
+
+def test_real_langfuse_trace_get_has_no_fields_param():
+    """Mock-drift guard: locks _FakeAPI._TraceNS.get's signature to the real langfuse SDK.
+
+    The installed langfuse client's ``api.trace.get`` is ``get(self, trace_id, *,
+    request_options=None)`` — there is no ``fields`` kwarg; passing one raises TypeError
+    against the real SDK. Constructing ``Langfuse(...)`` here is offline-safe (lazy, no
+    network calls). If a future langfuse upgrade adds/removes this parameter, this test
+    fails loudly instead of the fake silently drifting from the real contract again.
+    """
+    client = Langfuse(public_key="x", secret_key="y")
+    params = inspect.signature(client.api.trace.get).parameters
+    assert "fields" not in params
+    assert "trace_id" in params
+
+
+def test_export_run_records_real_sdk_version(atom_home, monkeypatch):
+    """The envelope's sdk_version must be a real version string, not None.
+
+    ``langfuse`` has no ``__version__`` attribute; ``_langfuse_sdk_version`` must resolve
+    the version via ``importlib.metadata`` instead, or every export silently loses
+    provenance (sdk_version: null).
+    """
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk")
+    _store_with_run(atom_home, "r1", ["succeeded"])
+    by_id = {"L0": _lead("L0", "t0")}
+    client = _FakeClient([[_summary("L0")], []], by_id)
+    result = export_run(str(atom_home), "r1", client=client, now=lambda: "t", sleep=_no_sleep)
+    env = json.loads(Path(result.path).read_text())
+    assert env["sdk_version"] is not None
+    assert re.match(r"\d+\.\d+", env["sdk_version"])
