@@ -61,6 +61,7 @@ class SubagentRunner:
     recursion_limit: int = 300  # max LangGraph super-steps per child run (~N/11 agent turns)
     base_trace: dict | None = None       # enriched lead trace; None -> sub-agent runs untraced
     observability: Any = None            # ObservabilityConfig | None
+    obs_provider: Any = None             # ObservabilityProvider | None (LangFuse callbacks + session)
     retry: Any = None                    # RetryPolicy | None; wired in Task 3 (child model retry/backoff)
     skill_catalog: list = field(default_factory=list)  # [{"name","description"}] always-on catalog
     has_skill_library: bool = False      # a skill_library/ exists -> bind search_skills
@@ -177,6 +178,10 @@ class SubagentRunner:
                     subagent_prompt_ref=_SUBAGENT_PROMPTS[subagent_type],
                     recursion_limit=self.recursion_limit, obs=self.observability,
                 ))
+            if self.obs_provider is not None:
+                # Attach LangFuse callbacks + stamp langfuse_session_id = run_id so this sub-agent
+                # joins the whole run's session. Runs after the trace merge, so run_id is present.
+                self.obs_provider.decorate_run_config(config)
             # Share the parent workspace: context thread_id == parent so tools find the same sandbox.
             context: WorkspaceContext = {
                 "thread_id": parent_thread_id,

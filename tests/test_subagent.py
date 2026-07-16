@@ -288,3 +288,36 @@ def test_child_middleware_retry_defaults_when_unset(atom_home):
                             bash_enabled=False)  # retry unset -> default policy
     llm = [m for m in runner._child_middleware() if isinstance(m, LLMErrorHandlingMiddleware)]
     assert llm and llm[0].policy.max_retries == 20
+
+
+def test_child_config_decorated_with_run_level_session():
+    """A sub-agent's config gets the LangFuse handler + langfuse_session_id = run_id."""
+    from atom.subagent import SubagentRunner
+    from atom.observability.provider import LangFuseProvider
+
+    class _Handler: ...
+    class _Client:
+        def flush(self): ...
+
+    handler = _Handler()
+    prov = LangFuseProvider(_Client(), handler)
+    # base_trace supplies run_id in metadata (as build_lead_trace would).
+    base_trace = {"run_name": "wf/s/t", "tags": ["atom-workflow"],
+                  "metadata": {"run_id": "r1", "session_id": "r1:s0:t0",
+                               "workflow": "wf", "step_title": "s", "task_id": "t"}}
+    runner = SubagentRunner(
+        model=None, home="/tmp", context_window=1000, bash_enabled=False,
+        base_trace=base_trace, observability=None, obs_provider=prov,
+    )
+    config = runner._child_config("r1:s0:t0:sub:ab12")
+    # emulate run()'s decoration order: merge subagent trace (if any) THEN decorate
+    from atom.observability import build_subagent_trace, _apply_trace
+    from atom.config.schema import ObservabilityConfig
+    _apply_trace(config, build_subagent_trace(
+        base_trace, parent_thread_id="r1:s0:t0", subagent_type="bash",
+        description="d", rendered_prompt="p", subagent_prompt_ref="ref",
+        recursion_limit=300, obs=ObservabilityConfig()))
+    prov.decorate_run_config(config)
+    assert handler in config["callbacks"]
+    assert config["metadata"]["langfuse_session_id"] == "r1"      # run, not parent thread
+    assert config["metadata"]["atom_subagent"] is True            # marker preserved
