@@ -238,6 +238,7 @@ async def test_subagent_child_config_carries_trace(base_config):
     assert md["parent_thread_id"] == "p1"
     assert md["subagent_type"] == "general-purpose"
     assert "role:subagent" in cfg["tags"] and "subagent_type:general-purpose" in cfg["tags"]
+    assert md["atom_subagent"] is True   # _child_config's marker must survive _apply_trace's metadata merge
 
 
 @pytest.mark.asyncio

@@ -82,11 +82,20 @@ def apply_observability_env(cfg: AtomConfig) -> ObservabilityStatus:
 
 
 def _apply_trace(run_config: dict, trace: dict | None) -> dict:
-    """Merge LangSmith run_name/tags/metadata into a LangGraph run config (in place)."""
+    """Merge LangSmith run_name/tags/metadata into a LangGraph run config (in place).
+
+    ``run_name``/``tags`` are replaced wholesale (a string and a list — nothing to merge).
+    ``metadata`` is MERGED instead: the trace's metadata overlays any metadata already present on
+    ``run_config``, rather than clobbering it. This matters because callers may pre-seed
+    ``run_config["metadata"]`` before tracing is applied (e.g. ``SubagentRunner._child_config``'s
+    ``atom_subagent`` marker) — a wholesale overwrite would silently drop those keys.
+    """
     if trace:
-        for key in ("run_name", "tags", "metadata"):
+        for key in ("run_name", "tags"):
             if trace.get(key) is not None:
                 run_config[key] = trace[key]
+        if trace.get("metadata") is not None:
+            run_config["metadata"] = {**run_config.get("metadata", {}), **trace["metadata"]}
     return run_config
 
 
