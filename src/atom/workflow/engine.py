@@ -21,6 +21,8 @@ from atom.config.schema import AtomConfig
 from atom.notes import ensure_vault
 from atom.observability import apply_observability_env, build_lead_trace, tracing_active
 from atom.runtime import run_agent
+from atom.streaming import StreamEmitter
+from atom.workflow.events import RunEventBus, channel_key
 from atom.workflow.lease import WorkerLease
 from atom.workflow.run_store import (
     RunManifest, RunStore, StepState, TaskState, serialize_messages,
@@ -64,6 +66,12 @@ class WorkflowEngine:
         # so tasks can bind their run's shared workspace. An empty list means "allow any" and is
         # left untouched. Built once here (never mutates self.cfg in place).
         self._task_cfg = self._build_task_cfg(cfg)
+        self.bus = RunEventBus(
+            max_chars=cfg.streaming.accumulator_max_chars,
+            queue_max=cfg.streaming.subscriber_queue_max,
+            retain_closed=cfg.streaming.retain_closed,
+            heartbeat_seconds=cfg.streaming.heartbeat_seconds,
+        )
         # --- durable-queue worker state ---
         self.lease = WorkerLease(self.store.queue_dir / "worker.lock")
         self._wake = asyncio.Event()
@@ -373,6 +381,8 @@ class WorkflowEngine:
         escaping here would propagate out of gather and abandon still-running siblings, which
         would keep mutating the shared manifest after the run has already moved on.
         """
+        key = channel_key(manifest.run_id, step_state.index, ts.id)
+        emitter: "StreamEmitter | None" = None
         timeout: Optional[float] = None
         try:
             ts.status = "running"
@@ -393,12 +403,19 @@ class WorkflowEngine:
             # _run_task and wedging the whole run.
             prompt = render_task_prompt(td, manifest.inputs)
             prepared = self.prepared_provider(td, step_def, workflow) if self.prepared_provider else None
+            if self.cfg.streaming.enabled:
+                emitter = StreamEmitter(
+                    lambda e, k=key: self.bus.publish(k, e),
+                    coalesce_ms=self.cfg.streaming.coalesce_ms,
+                    coalesce_chars=self.cfg.streaming.coalesce_chars,
+                )
             coro = run_agent(
                 prompt, config=self._task_cfg, profile=self.profile,
                 override_model=td.model, override_thinking=td.thinking,
                 workspace=manifest.workspace_path, uploads=manifest.uploads_path,
                 thread_id=ts.thread_id, trace=trace, prepared=prepared,
                 notes=notes.as_prompt_ctx() if notes else None,
+                on_event=(emitter.emit if emitter else None),
             )
             result = await (asyncio.wait_for(coro, timeout) if timeout else coro)
             self.store.save_chat(
@@ -426,6 +443,15 @@ class WorkflowEngine:
             ts.status = "failed"
             ts.error = f"{type(exc).__name__}: {exc}"
         ts.ended_at = _now()
+        if emitter is not None:
+            try:
+                await emitter.aclose()
+            except Exception:
+                pass
+            try:
+                await self.bus.close(key, error=(ts.error if ts.status == "failed" else None))
+            except Exception:
+                pass
         try:
             self.store.save(manifest)
         except Exception:
