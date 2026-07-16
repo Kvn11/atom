@@ -102,6 +102,9 @@ class RunEventBus:
                 try:
                     ev = await asyncio.wait_for(q.get(), timeout=self.heartbeat)
                 except asyncio.TimeoutError:
+                    if ch.closed:                        # sentinel may have been dropped under queue backpressure
+                        yield {"type": "done", "error": ch.error}
+                        return
                     yield {"type": "ping"}
                     continue
                 if ev is _TERMINAL:

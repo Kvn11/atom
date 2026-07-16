@@ -68,3 +68,25 @@ async def test_accumulator_bounds_trailing_text():
     assert len(snap["blocks"][-1]["text"]) <= 11  # bounded (elision prefix allowed)
     await bus.close(k)
     await gen.aclose()
+
+
+@pytest.mark.asyncio
+async def test_terminal_recovered_on_heartbeat_when_sentinel_dropped():
+    # queue_max=1 forces the _TERMINAL put to hit QueueFull; a small heartbeat makes the
+    # recovery path fire fast. Reproduces the dropped-sentinel scenario deterministically.
+    bus = RunEventBus(queue_max=1, heartbeat_seconds=0.05)
+    k = "r:s0:t"
+    gen = bus.stream(k)
+    assert (await gen.__anext__())["type"] == "snapshot"          # parked at the snapshot yield
+    await bus.publish(k, {"type": "text_delta", "text": "a"})     # queue=[a]
+    assert (await gen.__anext__())["type"] == "text_delta"        # consume 'a' -> now suspended inside the loop
+    await bus.publish(k, {"type": "text_delta", "text": "b"})     # queue=[b], full
+    await bus.close(k)                                            # put_nowait(_TERMINAL) -> QueueFull -> dropped
+    seen = []
+    for _ in range(6):
+        ev = await asyncio.wait_for(gen.__anext__(), timeout=2)
+        seen.append(ev["type"])
+        if ev["type"] == "done":
+            break
+    assert seen[-1] == "done"                                     # recovered via heartbeat recheck (no infinite ping)
+    await gen.aclose()
