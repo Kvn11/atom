@@ -14,13 +14,14 @@ from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from starlette.datastructures import UploadFile
 
 from atom.api.models import ExportRequest, RunRequest
 from atom.config import load_config
 from atom.config.schema import AtomConfig
 from atom.workflow.engine import WorkflowEngine
+from atom.workflow.events import channel_key
 from atom.workflow.schema import MissingInputError, list_workflows, load_workflow
 from atom.workflow.uploads import (
     UploadTooLarge, UploadTypeNotAllowed, check_extension, check_size, virtual_upload_path,
@@ -196,6 +197,27 @@ def create_app(cfg: AtomConfig | None = None, engine: WorkflowEngine | None = No
         if chat is None:
             raise HTTPException(404, "no chat yet")
         return chat
+
+    @app.get("/api/runs/{run_id}/tasks/{step}/{task_id}/stream")
+    async def stream_task(run_id: str, step: int, task_id: str):
+        """Server-Sent Events: live thinking/text/tool deltas for one task. Emits a `snapshot`
+        (catch-up) then live frames + `ping` heartbeats, ending with `done` (or `error`) on task
+        completion — at which point the client refetches the authoritative .../messages snapshot."""
+        if not cfg.streaming.enabled:
+            raise HTTPException(404, "streaming disabled")
+        key = channel_key(run_id, step, task_id)
+
+        async def gen():
+            async for ev in engine.bus.stream(key):
+                if ev.get("type") == "ping":
+                    yield ": ping\n\n"                       # SSE comment (keep-alive)
+                    continue
+                yield f"event: {ev['type']}\ndata: {json.dumps(ev)}\n\n"
+
+        return StreamingResponse(
+            gen(), media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
+        )
 
     @app.post("/api/runs/{run_id}/export")
     def export_traces(run_id: str, body: ExportRequest | None = None) -> dict:
