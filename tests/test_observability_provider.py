@@ -153,3 +153,16 @@ def test_build_provider_langfuse_missing_keys_degrades(monkeypatch, caplog):
         p = build_provider(_cfg(provider="langfuse"))
     assert isinstance(p, NullProvider)
     assert "LANGFUSE" in caplog.text
+
+
+def test_build_provider_langfuse_import_error_degrades(monkeypatch, caplog):
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk")
+
+    def raising_factory(lf, public, secret):
+        raise ImportError("no module named 'langfuse'")
+
+    with caplog.at_level(logging.WARNING):
+        p = build_provider(_cfg(provider="langfuse"), langfuse_factory=raising_factory)
+    assert isinstance(p, NullProvider)
+    assert "langfuse' package is not installed" in caplog.text
