@@ -1,8 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
-import { api, artifactUrl, Artifact, ChatMsg, Manifest } from "./api";
+import { api, artifactUrl, Artifact, ChatMsg, Manifest, StreamBlock } from "./api";
 import { Dot, StatusPill, elapsed, fmtSize } from "./ui";
 
 const IMG = /\.(png|jpe?g|gif|webp|svg|bmp|avif|apng|jfif|ico)$/i;
@@ -211,7 +211,7 @@ export function RunView({ runId, onBack }: { runId: string; onBack: () => void }
               )}
             </div>
             {tab === "transcript"
-              ? <Transcript runId={runId} sel={sel} status={manifest.status} />
+              ? <Transcript runId={runId} sel={sel} status={manifest.status} taskStatus={selTask?.status} />
               : <Deliverables runId={runId} arts={arts} open={openArt} setOpen={setOpenArt} />}
           </section>
         </div>
@@ -220,9 +220,14 @@ export function RunView({ runId, onBack }: { runId: string; onBack: () => void }
   );
 }
 
-function Transcript({ runId, sel, status }: { runId: string; sel: Sel | null; status: string }) {
+function Transcript(
+  { runId, sel, status, taskStatus }:
+  { runId: string; sel: Sel | null; status: string; taskStatus?: string },
+) {
   const [chat, setChat] = useState<ChatMsg[]>([]);
   const [pending, setPending] = useState(false);
+  const { blocks, streaming } = useTaskStream(runId, sel, taskStatus);
+
   useEffect(() => {
     if (!sel) { setChat([]); return; }
     let live = true;
@@ -232,9 +237,37 @@ function Transcript({ runId, sel, status }: { runId: string; sel: Sel | null; st
       .catch(() => { if (live) setChat([]); })
       .finally(() => { if (live) setPending(false); });
     return () => { live = false; };
-  }, [runId, sel?.step, sel?.task, status]);
+  }, [runId, sel?.step, sel?.task, status, taskStatus, streaming]);
 
   if (!sel) return <div className="placeholder">Select a task to view its transcript.</div>;
+
+  // Live stream takes over while the task runs and has produced something; after `done` flips
+  // `streaming` false, keep the live blocks visible until the reconciled chat snapshot loads
+  // (avoids a flash of "No messages yet…", and covers failed tasks that have no persisted chat).
+  if (blocks.length && (streaming || !chat.length)) {
+    return (
+      <div className="transcript">
+        {blocks.map((b, i) => {
+          const isLast = i === blocks.length - 1;
+          if (b.kind === "thinking")
+            return <div key={i} className="msg thinking"><div className="msg-role">thinking</div>
+              <div className="msg-text think">{b.text}{isLast && <span className="caret" />}</div></div>;
+          if (b.kind === "text")
+            return <div key={i} className="msg ai"><div className="msg-role">assistant</div>
+              <div className="msg-text">{b.text}{isLast && <span className="caret" />}</div></div>;
+          if (b.kind === "tool_call")
+            return <div key={i} className="msg tool-calls">
+              <div className={`toolcall${b.name === "present_files" ? " present" : ""}`}>
+                <span className="tc-name">→ {b.name}</span>
+                <span className="tc-args">{argSummary(b.args)}</span></div></div>;
+          return <div key={i} className={`msg tool${b.isError ? " err" : ""}`}>
+            <div className="msg-role">{b.name || "tool"}</div>
+            <div className="msg-text">{b.text}</div></div>;
+        })}
+      </div>
+    );
+  }
+
   if (pending && !chat.length) return <div className="placeholder">Loading transcript…</div>;
   if (!chat.length) return <div className="placeholder">No messages yet for {sel.task}.</div>;
 
@@ -359,6 +392,67 @@ function CodeView({ name, text, href }: { name: string; text: string; href: stri
       </div>
     </div>
   );
+}
+
+// Opens ONE EventSource for a running task and folds SSE events into an ordered block list.
+// Closes on the `done` event, on task switch, and on unmount; the caller then refetches the
+// authoritative persisted transcript. (There is deliberately no `error` listener — native
+// EventSource reconnect owns the "error" event.)
+function useTaskStream(runId: string, sel: Sel | null, taskStatus: string | undefined) {
+  const [blocks, setBlocks] = useState<StreamBlock[]>([]);
+  const [streaming, setStreaming] = useState(false);
+  const esRef = useRef<EventSource | null>(null);
+
+  useEffect(() => {
+    esRef.current?.close();
+    esRef.current = null;
+    setBlocks([]);
+    setStreaming(false);
+    if (!sel || taskStatus !== "running") return;
+
+    const es = new EventSource(api.streamUrl(runId, sel.step, sel.task));
+    esRef.current = es;
+    setStreaming(true);
+
+    const appendText = (kind: "thinking" | "text", text: string) =>
+      setBlocks((prev) => {
+        const last = prev[prev.length - 1];
+        if (last && last.kind === kind) {
+          const next = prev.slice(0, -1);
+          return [...next, { ...last, text: last.text + text }];
+        }
+        return [...prev, { kind, text } as StreamBlock];
+      });
+
+    es.addEventListener("snapshot", (e) => {
+      const { blocks: bs } = JSON.parse((e as MessageEvent).data);
+      // Map accumulator events (typed by wire name) into render blocks.
+      const mapped: StreamBlock[] = (bs || []).map((b: any) =>
+        b.type === "thinking_delta" ? { kind: "thinking", text: b.text }
+        : b.type === "text_delta" ? { kind: "text", text: b.text }
+        : b.type === "tool_call" ? { kind: "tool_call", id: b.id, name: b.name, args: b.args }
+        : { kind: "tool_result", name: b.name, text: b.text, isError: b.is_error });
+      setBlocks(mapped);
+    });
+    es.addEventListener("thinking_delta", (e) => appendText("thinking", JSON.parse((e as MessageEvent).data).text));
+    es.addEventListener("text_delta", (e) => appendText("text", JSON.parse((e as MessageEvent).data).text));
+    es.addEventListener("tool_call", (e) => {
+      const d = JSON.parse((e as MessageEvent).data);
+      setBlocks((prev) => [...prev, { kind: "tool_call", id: d.id, name: d.name, args: d.args }]);
+    });
+    es.addEventListener("tool_result", (e) => {
+      const d = JSON.parse((e as MessageEvent).data);
+      setBlocks((prev) => [...prev, { kind: "tool_result", name: d.name, text: d.text, isError: d.is_error }]);
+    });
+    const end = () => { setStreaming(false); es.close(); if (esRef.current === es) esRef.current = null; };
+    es.addEventListener("done", end);   // terminal frame (carries an `error` field on task failure)
+    // Native EventSource "error" = transient connection drop; leave it to auto-reconnect. Final
+    // teardown also happens when the task leaves "running" (the effect deps re-run and close es).
+
+    return () => { es.close(); if (esRef.current === es) esRef.current = null; };
+  }, [runId, sel?.step, sel?.task, taskStatus]);
+
+  return { blocks, streaming };
 }
 
 function DownloadCard({ art, href, note }: { art: Artifact; href: string; note: string }) {

@@ -14,6 +14,11 @@ export interface ChatMsg {
   role: string; text: string; name?: string;
   tool_calls?: { name: string; args?: Record<string, unknown> }[];
 }
+export type StreamBlock =
+  | { kind: "thinking"; text: string }
+  | { kind: "text"; text: string }
+  | { kind: "tool_call"; id?: string; name?: string; args?: Record<string, unknown> }
+  | { kind: "tool_result"; name?: string; text: string; isError: boolean };
 export interface RunSummary {
   run_id: string; workflow: string; status: string; created_at: string; ended_at?: string;
   steps_total: number; steps_done: number; tasks_total: number; tasks_done: number; current_step?: string;
@@ -55,6 +60,8 @@ export const api = {
   run: (id: string): Promise<Manifest> => fetch(`/api/runs/${id}`).then(j),
   messages: (id: string, step: number, task: string): Promise<ChatMsg[]> =>
     fetch(`/api/runs/${id}/tasks/${step}/${task}/messages`).then(j),
+  streamUrl: (id: string, step: number, task: string): string =>
+    `/api/runs/${id}/tasks/${step}/${encodeURIComponent(task)}/stream`,
   artifacts: (id: string): Promise<Artifact[]> => fetch(`/api/runs/${id}/artifacts`).then(j),
   artifactText: (id: string, rel: string): Promise<string> =>
     fetch(artifactUrl(id, rel)).then(async (r) => { if (!r.ok) throw new Error(await r.text()); return r.text(); }),
