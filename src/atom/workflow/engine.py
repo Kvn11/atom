@@ -12,14 +12,12 @@ import datetime
 import logging
 from typing import Callable, Optional
 
-from langchain_core.tracers.langchain import wait_for_all_tracers
-
 logger = logging.getLogger(__name__)
 
 from atom.agent import PreparedModel
 from atom.config.schema import AtomConfig
 from atom.notes import ensure_vault
-from atom.observability import apply_observability_env, build_lead_trace, tracing_active
+from atom.observability import build_lead_trace, build_provider
 from atom.runtime import run_agent
 from atom.streaming import StreamEmitter
 from atom.workflow.events import RunEventBus, channel_key
@@ -81,15 +79,8 @@ class WorkflowEngine:
         self._worker_tasks: set[asyncio.Task] = set()
         self._worker_loop_task: asyncio.Task | None = None
         self._stopping = False
-        # Map observability config -> LANGSMITH_* env once, before any run (idempotent).
-        status = apply_observability_env(cfg)
-        if status.active:
-            logger.info("observability: tracing active -> project %r", status.project)
-        elif status.reason == "enabled-but-no-api-key":
-            logger.warning(
-                "observability: observability.enabled but LANGSMITH_API_KEY missing "
-                "-- traces will NOT be uploaded"
-            )
+        # Build the observability provider once, before any run (logs its own status).
+        self.obs_provider = build_provider(cfg)
 
     def _build_task_cfg(self, cfg: AtomConfig) -> AtomConfig:
         if not cfg.sandbox.allowed_workspace_roots:
@@ -363,13 +354,13 @@ class WorkflowEngine:
             raise
         finally:
             self._defs.pop(run_id, None)
-            # Flush LangSmith's background trace queue before the process can exit, so the run's
-            # final batch is guaranteed uploaded and downloadable. No-op when tracing is off.
-            if tracing_active():
-                try:
-                    wait_for_all_tracers()
-                except Exception:  # noqa: BLE001 — a flush failure must never mask a propagating exception
-                    pass
+            # Flush the active backend's trace queue before the process can exit, so the run's
+            # final batch is uploaded and downloadable. No-op for NullProvider; a flush failure
+            # must never mask a propagating exception.
+            try:
+                self.obs_provider.flush()
+            except Exception:  # noqa: BLE001
+                pass
 
     async def _run_task(
         self, manifest: RunManifest, workflow: WorkflowDef,
@@ -416,6 +407,7 @@ class WorkflowEngine:
                 thread_id=ts.thread_id, trace=trace, prepared=prepared,
                 notes=notes.as_prompt_ctx() if notes else None,
                 on_event=(emitter.emit if emitter else None),
+                obs_provider=self.obs_provider,
             )
             result = await (asyncio.wait_for(coro, timeout) if timeout else coro)
             self.store.save_chat(

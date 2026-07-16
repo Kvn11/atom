@@ -422,47 +422,60 @@ def _one_task_wf():
 
 
 @pytest.mark.asyncio
-async def test_execute_flushes_tracers_when_active(base_config, monkeypatch):
+async def test_execute_flush_failure_does_not_break_run(base_config, monkeypatch):
+    """A raising provider.flush() must never mask a propagating exception or break the run."""
+    from atom.observability.provider import ObservabilityProvider
+
+    class _Boom(ObservabilityProvider):
+        name = "boom"
+        def is_active(self): return True
+        def decorate_run_config(self, config): return config
+        def flush(self): raise RuntimeError("flush exploded")
+
+    monkeypatch.setattr(engine_mod, "build_provider", lambda cfg: _Boom())
+    engine = WorkflowEngine(
+        base_config,
+        prepared_provider=lambda td, sd, wf: make_prepared([AIMessage(content="done")]),
+    )
+    engine.create_run(_one_task_wf(), {"topic": "sea"}, "runH", "2026-07-09T00:00:00")
+    manifest = await engine.execute("runH")   # must NOT raise despite flush blowing up
+    assert manifest.status == "complete"
+
+
+def test_engine_builds_langfuse_provider(base_config, monkeypatch):
+    from atom.config.schema import ObservabilityConfig
+    from atom.observability.provider import LangFuseProvider
+
+    class _Handler: ...
+    class _Client:
+        def flush(self): ...
+
+    monkeypatch.setattr(engine_mod, "build_provider",
+                        lambda cfg: LangFuseProvider(_Client(), _Handler()))
+    cfg = base_config.model_copy(update={"observability": ObservabilityConfig(provider="langfuse")})
+    engine = WorkflowEngine(cfg)
+    assert isinstance(engine.obs_provider, LangFuseProvider)
+
+
+@pytest.mark.asyncio
+async def test_execute_flushes_via_provider(base_config, monkeypatch):
     calls = []
-    monkeypatch.setattr(engine_mod, "tracing_active", lambda: True)
-    monkeypatch.setattr(engine_mod, "wait_for_all_tracers", lambda: calls.append("flush"))
+    from atom.observability.provider import ObservabilityProvider
+
+    class _Rec(ObservabilityProvider):
+        name = "rec"
+        def is_active(self): return True
+        def decorate_run_config(self, config): return config
+        def flush(self): calls.append("flush")
+
+    monkeypatch.setattr(engine_mod, "build_provider", lambda cfg: _Rec())
     engine = WorkflowEngine(
         base_config,
         prepared_provider=lambda td, sd, wf: make_prepared([AIMessage(content="done")]),
     )
     engine.create_run(_one_task_wf(), {"topic": "sea"}, "runF", "2026-07-09T00:00:00")
     await engine.execute("runF")
-    assert calls == ["flush"]  # flushed exactly once
-
-
-@pytest.mark.asyncio
-async def test_execute_skips_flush_when_inactive(base_config, monkeypatch):
-    calls = []
-    monkeypatch.setattr(engine_mod, "tracing_active", lambda: False)
-    monkeypatch.setattr(engine_mod, "wait_for_all_tracers", lambda: calls.append("flush"))
-    engine = WorkflowEngine(
-        base_config,
-        prepared_provider=lambda td, sd, wf: make_prepared([AIMessage(content="done")]),
-    )
-    engine.create_run(_one_task_wf(), {"topic": "sea"}, "runG", "2026-07-09T00:00:00")
-    await engine.execute("runG")
-    assert calls == []  # tracing off -> no flush
-
-
-@pytest.mark.asyncio
-async def test_execute_flush_failure_does_not_break_run(base_config, monkeypatch):
-    """FIX: a raising flush must never mask a propagating exception or break the run."""
-    def boom():
-        raise RuntimeError("langsmith flush exploded")
-    monkeypatch.setattr(engine_mod, "tracing_active", lambda: True)
-    monkeypatch.setattr(engine_mod, "wait_for_all_tracers", boom)
-    engine = WorkflowEngine(
-        base_config,
-        prepared_provider=lambda td, sd, wf: make_prepared([AIMessage(content="done")]),
-    )
-    engine.create_run(_one_task_wf(), {"topic": "sea"}, "runH", "2026-07-09T00:00:00")
-    manifest = await engine.execute("runH")   # must NOT raise despite the flush blowing up
-    assert manifest.status == "complete"
+    assert calls == ["flush"]  # engine flushes the provider exactly once
 
 
 @pytest.mark.asyncio
