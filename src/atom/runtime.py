@@ -60,16 +60,24 @@ def _build_context(cfg: AtomConfig, *, user_id, thread_id, profile_name, home, w
     }
 
 
-def build_run_config(thread_id: str, recursion_limit: int, trace: dict | None = None) -> dict:
+def build_run_config(
+    thread_id: str, recursion_limit: int, trace: dict | None = None, obs_provider=None,
+) -> dict:
     """Assemble the LangGraph invoke config: thread id + recursion_limit (+ optional trace).
+
+    When an observability provider is supplied, it decorates the config (LangFuse attaches its
+    CallbackHandler and stamps the run-level session id; LangSmith/none are no-ops).
 
     ``recursion_limit`` counts super-steps, not agent turns. atom's middleware chain spends
     ~11 super-steps per turn, so this must be well above the intended turn count (see
     ``AgentProfile.recursion_limit``).
     """
-    return _apply_trace(
+    config = _apply_trace(
         {"configurable": {"thread_id": thread_id}, "recursion_limit": recursion_limit}, trace
     )
+    if obs_provider is not None:
+        obs_provider.decorate_run_config(config)
+    return config
 
 
 async def run_agent(
@@ -89,6 +97,7 @@ async def run_agent(
     prepared: PreparedModel | None = None,
     notes: dict | None = None,
     on_event: "Callable[[dict], Awaitable[None]] | None" = None,
+    obs_provider=None,
 ) -> RunResult:
     """Run the lead agent on ``task`` and return the final result.
 
@@ -123,7 +132,7 @@ async def run_agent(
             override_model=override_model, override_thinking=override_thinking,
             override_system_prompt=override_system_prompt, trace=trace, notes=notes,
         )
-        run_config = build_run_config(thread_id, prof.recursion_limit, trace)
+        run_config = build_run_config(thread_id, prof.recursion_limit, trace, obs_provider)
         inp = {"messages": [HumanMessage(content=content)]}
         if on_event is not None and cfg.streaming.enabled:
             from atom.streaming import translate_message_chunk, translate_update
