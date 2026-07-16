@@ -76,6 +76,17 @@ def test_subagent_limit_strips_orphaned_tool_use_blocks():
     assert len(tool_use_ids) == 2
 
 
+def test_child_config_tags_subagent():
+    from atom.subagent import SubagentRunner
+    # Construct minimally; _child_config only reads self.recursion_limit.
+    runner = SubagentRunner.__new__(SubagentRunner)
+    runner.recursion_limit = 300
+    cfg = runner._child_config("child-1")
+    assert cfg["metadata"] == {"atom_subagent": True}
+    assert cfg["configurable"]["thread_id"] == "child-1"
+    assert cfg["recursion_limit"] == 300
+
+
 def test_child_agent_has_skill_tools_and_catalog(atom_home):
     from atom.subagent import SubagentRunner
 
@@ -249,7 +260,10 @@ async def test_subagent_no_base_trace_is_untraced(base_config):
     runner._child_agent = lambda st, system=None: _StubAgent()
     await runner.run("p1", "d", "go", "general-purpose")
     cfg = captured["config"]
-    assert "metadata" not in cfg and "tags" not in cfg  # CLI-style: nothing attached
+    # Child runs always have the atom_subagent marker for filtering (see _child_config).
+    # But when there's no base_trace, no observability metadata is attached.
+    assert cfg["metadata"] == {"atom_subagent": True}
+    assert "tags" not in cfg
 
 
 def test_child_middleware_includes_llm_error_retry(atom_home):

@@ -70,7 +70,14 @@ class SubagentRunner:
         self._sem = asyncio.Semaphore(clamp_concurrency(self.max_concurrent))
 
     def _child_config(self, child_id: str) -> dict:
-        return {"configurable": {"thread_id": child_id}, "recursion_limit": self.recursion_limit}
+        return {
+            "configurable": {"thread_id": child_id},
+            "recursion_limit": self.recursion_limit,
+            # Tag child runs so their streamed model deltas are filtered out of the lead's live
+            # stream (see atom.streaming.translate_message_chunk). Metadata is key-overridden per
+            # run in LangSmith, so this stays isolated to the child and never leaks upward.
+            "metadata": {"atom_subagent": True},
+        }
 
     def _child_tools(self, subagent_type: SubagentType) -> list:
         # Note: children get file tools (+bash) but NOT delegate_task — no nested delegation.
