@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import uuid
 import warnings
 from pathlib import Path
@@ -270,6 +271,18 @@ def _parse_task_selector(sel: str) -> tuple[int, str]:
     return int(step_str), task_id
 
 
+def _export_module(cfg):
+    """Select the exporter matching the configured provider (both expose export_run/export_task/resolve_run_ids)."""
+    provider = cfg.observability.provider
+    if provider is None:
+        provider = "langsmith" if cfg.observability.enabled else "none"
+    if provider == "langfuse":
+        from atom.observability import langfuse_export as mod
+        return "langfuse", mod
+    from atom.observability import export as mod
+    return "langsmith", mod
+
+
 def _export_one_task(export_mod, cfg, proj: str, run_id, latest, all_workflow, task: str) -> None:
     """Export a single task's trace (runs/<id>/exports/s<step>__<task>.json)."""
     if all_workflow:
@@ -323,14 +336,20 @@ def workflow_export(
     Whole run -> runs/<run_id>/export.json. With --task, one completed task ->
     runs/<run_id>/exports/s<step>__<task>.json.
     """
-    from atom.observability import export as export_mod
-
     _load_env()
     cfg = load_config(config)
-    proj = project or cfg.observability.project
-    if not proj:
-        console.print("[red]no LangSmith project — set observability.project or pass --project[/red]")
-        raise typer.Exit(1)
+    provider, export_mod = _export_module(cfg)
+
+    if provider == "langfuse":
+        proj = None                                       # LangFuse has no --project concept here
+        if not (os.environ.get("LANGFUSE_PUBLIC_KEY") and os.environ.get("LANGFUSE_SECRET_KEY")):
+            console.print("[red]set LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY to export from LangFuse[/red]")
+            raise typer.Exit(1)
+    else:
+        proj = project or cfg.observability.project
+        if not proj:
+            console.print("[red]no LangSmith project — set observability.project or pass --project[/red]")
+            raise typer.Exit(1)
 
     if task is not None:
         _export_one_task(export_mod, cfg, proj, run_id, latest, all_workflow, task)

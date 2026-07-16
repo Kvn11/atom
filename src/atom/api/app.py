@@ -7,6 +7,7 @@ from __future__ import annotations
 import datetime
 import json
 import mimetypes
+import os
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -226,12 +227,20 @@ def create_app(cfg: AtomConfig | None = None, engine: WorkflowEngine | None = No
         Sync def on purpose: the exporter polls LangSmith with blocking sleeps, so FastAPI runs it
         in a threadpool and never stalls the event loop / queue worker.
         """
-        from atom.observability import export as export_mod
-
+        provider = cfg.observability.provider
+        if provider is None:
+            provider = "langsmith" if cfg.observability.enabled else "none"
+        if provider == "langfuse":
+            from atom.observability import langfuse_export as export_mod
+            if not (os.environ.get("LANGFUSE_PUBLIC_KEY") and os.environ.get("LANGFUSE_SECRET_KEY")):
+                raise HTTPException(503, "export not configured: set LANGFUSE_PUBLIC_KEY/LANGFUSE_SECRET_KEY")
+            proj = None
+        else:
+            from atom.observability import export as export_mod
+            proj = cfg.observability.project
+            if not proj:
+                raise HTTPException(503, "export not configured: set observability.project")
         body = body or ExportRequest()
-        proj = cfg.observability.project
-        if not proj:                                          # server isn't configured for export — 5xx, not the client's fault
-            raise HTTPException(503, "export not configured: set observability.project")
         try:
             if body.step is not None and body.task is not None:
                 res = export_mod.export_task(cfg.home, run_id, body.step, body.task, project=proj)

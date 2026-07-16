@@ -238,6 +238,44 @@ async def test_export_endpoint_unconfigured_is_503(base_config, atom_home):
         assert r.status_code == 503
 
 
+# --- provider dispatch (LangSmith vs LangFuse) ---
+
+import atom.observability.langfuse_export as lf_mod
+
+
+@pytest.mark.asyncio
+async def test_export_endpoint_dispatches_to_langfuse(base_config, atom_home, monkeypatch):
+    """provider=langfuse -> the endpoint calls the LangFuse exporter, gated on LANGFUSE keys."""
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk")
+    base_config.observability.provider = "langfuse"
+    seen = {}
+    def fake_run(home, run_id, *, project, **kw):
+        seen.update(run_id=run_id, project=project)
+        return ExportResult(run_id=run_id, path=f"/x/{run_id}/export.json",
+                            complete=True, expected_roots=1, fetched_roots=1)
+    monkeypatch.setattr(lf_mod, "export_run", fake_run)
+    app = create_app(base_config, engine=WorkflowEngine(base_config, prepared_provider=_provider))
+    async with _client(app) as client:
+        r = await client.post("/api/runs/r1/export", json={})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["scope"] == "run"
+        assert seen == {"run_id": "r1", "project": None}
+
+
+@pytest.mark.asyncio
+async def test_export_endpoint_langfuse_missing_keys_is_503(base_config, atom_home, monkeypatch):
+    monkeypatch.delenv("LANGFUSE_PUBLIC_KEY", raising=False)
+    monkeypatch.delenv("LANGFUSE_SECRET_KEY", raising=False)
+    base_config.observability.provider = "langfuse"
+    app = create_app(base_config, engine=WorkflowEngine(base_config, prepared_provider=_provider))
+    async with _client(app) as client:
+        r = await client.post("/api/runs/r1/export", json={})
+        assert r.status_code == 503
+        assert "LANGFUSE" in r.json()["detail"]
+
+
 @pytest.mark.asyncio
 async def test_html_artifact_served_as_attachment(base_config, atom_home):
     _seed(atom_home)

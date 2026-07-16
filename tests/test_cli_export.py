@@ -148,3 +148,40 @@ def test_export_task_no_traces_exits_1(monkeypatch):
     res = runner.invoke(app, ["workflow", "export", "r1", "--task", "0:writer", "--project", "proj"])
     assert res.exit_code == 1
     assert "no traces found" in res.stdout
+
+
+# --- provider dispatch (LangSmith vs LangFuse) ---
+
+import atom.cli as cli
+import atom.observability.langfuse_export as lf_mod
+from atom.config.schema import AtomConfig, ObservabilityConfig
+
+
+def test_export_dispatches_to_langfuse(monkeypatch):
+    """provider=langfuse -> `workflow export` calls the LangFuse exporter, gated on LANGFUSE keys."""
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk")
+    cfg = AtomConfig(observability=ObservabilityConfig(provider="langfuse"))
+    monkeypatch.setattr(cli, "load_config", lambda config: cfg)
+    monkeypatch.setattr(lf_mod, "resolve_run_ids",
+                        lambda home, **kw: [kw["run_id"]] if kw.get("run_id") else [])
+    seen = {}
+    def fake_run(home, run_id, *, project, **kw):
+        seen["run_id"] = run_id
+        return _ok(run_id)
+    monkeypatch.setattr(lf_mod, "export_run", fake_run)
+
+    res = runner.invoke(app, ["workflow", "export", "abc123"])   # no --project needed for langfuse
+    assert res.exit_code == 0
+    assert seen["run_id"] == "abc123"
+    assert "exported abc123" in res.stdout
+
+
+def test_export_langfuse_missing_keys_exits_1(monkeypatch):
+    monkeypatch.delenv("LANGFUSE_PUBLIC_KEY", raising=False)
+    monkeypatch.delenv("LANGFUSE_SECRET_KEY", raising=False)
+    cfg = AtomConfig(observability=ObservabilityConfig(provider="langfuse"))
+    monkeypatch.setattr(cli, "load_config", lambda config: cfg)
+    res = runner.invoke(app, ["workflow", "export", "abc123"])
+    assert res.exit_code == 1
+    assert "LANGFUSE" in res.stdout
