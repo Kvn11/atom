@@ -116,6 +116,49 @@ Step 1: open the PDF. Step 2: extract each page's text. Step 3: concatenate and 
 """
 
 
+from langchain_core.messages import AIMessageChunk
+from langchain_core.outputs import ChatGenerationChunk
+
+
+class StreamingTextChatModel(BaseChatModel):
+    """Streams a fixed text word-by-word via _astream so astream(stream_mode='messages') yields
+    multiple text deltas. Falls back to _agenerate for the ainvoke path."""
+    text: str = "hello streamed world"
+
+    def bind_tools(self, tools, **kwargs):
+        return self
+
+    def _generate(self, messages, stop=None, run_manager=None, **kwargs) -> ChatResult:
+        return ChatResult(generations=[ChatGeneration(message=AIMessage(content=self.text))])
+
+    async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs) -> ChatResult:
+        return self._generate(messages)
+
+    async def _astream(self, messages, stop=None, run_manager=None, **kwargs):
+        for word in self.text.split(" "):
+            piece = word + " "
+            chunk = ChatGenerationChunk(message=AIMessageChunk(content=piece))
+            if run_manager:
+                await run_manager.on_llm_new_token(piece, chunk=chunk)
+            yield chunk
+
+    @property
+    def _llm_type(self) -> str:
+        return "streaming-text"
+
+
+def make_streaming_prepared(text: str = "hello streamed world") -> PreparedModel:
+    model = StreamingTextChatModel(text=text, profile=DEFAULT_PROFILE_DATA)
+    caps = {
+        "context_window": model.profile["max_input_tokens"],
+        "max_output_tokens": model.profile["max_output_tokens"],
+        "supports_vision": model.profile["image_inputs"],
+        "supports_reasoning": model.profile["reasoning_output"],
+        "has_profile": True,
+    }
+    return PreparedModel(model=model, caps=caps, context_window=caps["context_window"])
+
+
 def seed_library(home) -> None:
     """Create one deferred tool (wordcount) and one deferred skill (pdf-extract)."""
     from pathlib import Path
