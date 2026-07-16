@@ -59,3 +59,19 @@ def test_uploads_config_override():
     assert uc.max_file_bytes == 1024
     assert uc.allowed_extensions == ["pdf", "txt"]
     assert uc.max_files_per_run == 3
+
+
+def test_streaming_config_defaults():
+    from atom.config.schema import AtomConfig
+    cfg = AtomConfig()
+    assert cfg.streaming.enabled is True
+    assert cfg.streaming.coalesce_ms == 50
+    assert cfg.streaming.coalesce_chars == 240
+    assert cfg.streaming.heartbeat_seconds == 15.0
+
+
+def test_streaming_config_override():
+    from atom.config.schema import AtomConfig, StreamingConfig
+    cfg = AtomConfig(streaming=StreamingConfig(enabled=False, coalesce_ms=10))
+    assert cfg.streaming.enabled is False
+    assert cfg.streaming.coalesce_ms == 10

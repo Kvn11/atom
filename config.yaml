@@ -33,6 +33,12 @@ queue:
   poll_interval_seconds: 3 # worker re-scan interval for cross-process enqueues + crash recovery
   max_drain_attempts: 5    # quarantine a run after this many failed drain attempts (e.g. unreadable run.json) instead of hot-looping
 
+streaming:
+  enabled: true            # stream live thinking/text/tool activity to the run view; false -> UI polls as before
+  coalesce_ms: 50          # batch token deltas over this window before pushing (efficiency)
+  coalesce_chars: 240      # ...or after this many buffered chars, whichever comes first
+  heartbeat_seconds: 15    # SSE keep-alive cadence
+
 guardrails:
   enabled: false           # dormant seam; turn on to gate tool calls (e.g. bash)
 

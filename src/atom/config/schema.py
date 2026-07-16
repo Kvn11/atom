@@ -74,6 +74,24 @@ class QueueConfig(_Base):
     max_drain_attempts: int = 5
 
 
+class StreamingConfig(_Base):
+    # Live-stream the lead agent's thinking/text/tool activity to the run view as a task runs.
+    # False -> run_agent uses ainvoke and the SSE endpoint 404s (the UI falls back to polling).
+    enabled: bool = True
+    # Batch text/thinking deltas over this window (ms) OR this many chars, whichever first, before
+    # publishing — bounds SSE frame + React re-render frequency for high-rate token streams.
+    coalesce_ms: int = 50
+    coalesce_chars: int = 240
+    # Per-channel catch-up buffer cap; the trailing text block is elided past this to bound memory.
+    accumulator_max_chars: int = 20000
+    # Per-subscriber queue depth before deltas are dropped (client re-syncs from a fresh snapshot).
+    subscriber_queue_max: int = 512
+    # Keep this many completed channels so a subscriber joining just after completion still catches up.
+    retain_closed: int = 64
+    # SSE keep-alive ping cadence (seconds).
+    heartbeat_seconds: float = 15.0
+
+
 class UploadsConfig(_Base):
     # Limits for workflow file-input uploads. The API is unauthenticated with open CORS, so
     # these caps are the primary guard on an otherwise unbounded input surface.
@@ -149,6 +167,7 @@ class AtomConfig(_Base):
     library: LibraryConfig = Field(default_factory=LibraryConfig)
     workflow: WorkflowConfig = Field(default_factory=WorkflowConfig)
     queue: QueueConfig = Field(default_factory=QueueConfig)
+    streaming: StreamingConfig = Field(default_factory=StreamingConfig)
     uploads: UploadsConfig = Field(default_factory=UploadsConfig)
     retry: RetryConfig = Field(default_factory=RetryConfig)
     guardrails: GuardrailConfig = Field(default_factory=GuardrailConfig)
