@@ -7,6 +7,7 @@ langgraph-checkpoint-sqlite>=2.0
 aiosqlite>=0.20
 # Observability
 langsmith>=0.9,<1
+langfuse>=3,<4
 # Model providers
 langchain-anthropic>=1.0
 langchain-openai>=1.0

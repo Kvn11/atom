@@ -19,6 +19,7 @@ dependencies = [
     "aiosqlite>=0.20",
     # --- Observability ---
     "langsmith>=0.9,<1",
+    "langfuse>=3,<4",
     # --- Model providers (pin each; upgrade deliberately) ---
     "langchain-anthropic>=1.0",
     "langchain-openai>=1.0",

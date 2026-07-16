@@ -5,6 +5,7 @@ import logging
 
 from atom.config.schema import AtomConfig, ObservabilityConfig
 from atom.observability.provider import (
+    LangFuseProvider,
     LangSmithProvider,
     NullProvider,
     ObservabilityProvider,
@@ -71,3 +72,84 @@ def test_langsmith_flush_calls_wait_for_all_tracers(monkeypatch):
     p = build_provider(_cfg(provider="langsmith", enabled=True))
     p.flush()
     assert called["n"] == 1
+
+
+class _FakeHandler:
+    pass
+
+
+class _FakeLFClient:
+    def __init__(self):
+        self.flushed = 0
+
+    def flush(self):
+        self.flushed += 1
+
+
+def test_langfuse_decorate_attaches_handler_and_session():
+    handler = _FakeHandler()
+    p = LangFuseProvider(_FakeLFClient(), handler)
+    assert p.name == "langfuse" and p.is_active() is True
+    cfg = {"configurable": {"thread_id": "r1:s0:t0"}, "metadata": {"run_id": "r1"}}
+    out = p.decorate_run_config(cfg)
+    assert out["callbacks"] == [handler]
+    assert out["metadata"]["langfuse_session_id"] == "r1"     # session = whole run
+
+
+def test_langfuse_decorate_preserves_existing_callbacks_no_dupes():
+    handler = _FakeHandler()
+    p = LangFuseProvider(_FakeLFClient(), handler)
+    other = _FakeHandler()
+    cfg = {"callbacks": [other], "metadata": {"run_id": "r1"}}
+    p.decorate_run_config(cfg)
+    assert cfg["callbacks"] == [other, handler]
+    p.decorate_run_config(cfg)                                 # idempotent
+    assert cfg["callbacks"] == [other, handler]
+
+
+def test_langfuse_decorate_subagent_session_is_run_not_thread():
+    # A sub-agent config: its own thread_id, but run_id metadata inherited from the lead.
+    handler = _FakeHandler()
+    p = LangFuseProvider(_FakeLFClient(), handler)
+    cfg = {"configurable": {"thread_id": "r1:s0:t0:sub:ab12"},
+           "metadata": {"run_id": "r1", "session_id": "r1:s0:t0", "is_subagent": True}}
+    p.decorate_run_config(cfg)
+    assert cfg["metadata"]["langfuse_session_id"] == "r1"      # groups into the run, not the parent thread
+
+
+def test_langfuse_decorate_no_run_id_skips_session():
+    p = LangFuseProvider(_FakeLFClient(), _FakeHandler())
+    cfg = {"metadata": {}}
+    p.decorate_run_config(cfg)
+    assert "langfuse_session_id" not in cfg["metadata"]        # defensive: no KeyError
+
+
+def test_langfuse_flush_delegates_to_client():
+    client = _FakeLFClient()
+    LangFuseProvider(client, _FakeHandler()).flush()
+    assert client.flushed == 1
+
+
+def test_build_provider_langfuse_uses_injected_factory(monkeypatch):
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk")
+    seen = {}
+    client, handler = _FakeLFClient(), _FakeHandler()
+
+    def fake_factory(lf, public, secret):
+        seen["public"], seen["secret"] = public, secret
+        return client, handler
+
+    p = build_provider(_cfg(provider="langfuse"), langfuse_factory=fake_factory)
+    assert isinstance(p, LangFuseProvider) and p.is_active() is True
+    assert seen == {"public": "pk", "secret": "sk"}
+
+
+def test_build_provider_langfuse_missing_keys_degrades(monkeypatch, caplog):
+    monkeypatch.delenv("LANGFUSE_PUBLIC_KEY", raising=False)
+    monkeypatch.delenv("LANGFUSE_SECRET_KEY", raising=False)
+    import logging
+    with caplog.at_level(logging.WARNING):
+        p = build_provider(_cfg(provider="langfuse"))
+    assert isinstance(p, NullProvider)
+    assert "LANGFUSE" in caplog.text

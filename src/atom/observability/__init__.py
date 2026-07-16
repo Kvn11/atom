@@ -6,6 +6,7 @@ names so ``from atom.observability import build_lead_trace`` (and friends) keeps
 working unchanged after the module -> package conversion.
 """
 from atom.observability.provider import (
+    LangFuseProvider,
     LangSmithProvider,
     NullProvider,
     ObservabilityProvider,
@@ -24,6 +25,7 @@ from atom.observability.trace import (
 )
 
 __all__ = [
+    "LangFuseProvider",
     "LangSmithProvider",
     "NullProvider",
     "ObservabilityProvider",
