@@ -5,6 +5,12 @@ Push side (trace builders + env activation) lives in ``trace``; the pull side
 names so ``from atom.observability import build_lead_trace`` (and friends) keeps
 working unchanged after the module -> package conversion.
 """
+from atom.observability.provider import (
+    LangSmithProvider,
+    NullProvider,
+    ObservabilityProvider,
+    build_provider,
+)
 from atom.observability.trace import (
     ObservabilityStatus,
     _apply_trace,
@@ -18,10 +24,14 @@ from atom.observability.trace import (
 )
 
 __all__ = [
+    "LangSmithProvider",
+    "NullProvider",
+    "ObservabilityProvider",
     "ObservabilityStatus",
     "_apply_trace",
     "apply_observability_env",
     "build_lead_trace",
+    "build_provider",
     "build_subagent_trace",
     "enrich_lead_trace",
     "git_sha",
