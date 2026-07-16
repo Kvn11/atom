@@ -1,6 +1,7 @@
 """LangFuse run/task exporter with an injected fake client."""
 from __future__ import annotations
 
+import datetime
 import json
 from pathlib import Path
 
@@ -81,6 +82,27 @@ def _lead(id, task): return _Trace(id, {"run_id": "r1", "task_id": task, "agent_
 def _sub(id, task): return _Trace(id, {"run_id": "r1", "task_id": task, "agent_role": "subagent", "is_subagent": True})
 
 
+class _DatetimeInPythonModeTrace:
+    """A fake trace whose python-mode dump is NOT JSON-safe but whose json-mode dump is.
+
+    Mirrors what a real LangFuse SDK object does: ``model_dump()``/``model_dump(mode="python")``
+    keeps native ``datetime`` values, while ``model_dump(mode="json")`` serializes them to strings.
+    If the exporter ever regresses to calling ``model_dump()`` with no args, ``json.dumps`` on the
+    envelope in ``export_run`` would raise ``TypeError: Object of type datetime is not JSON serializable``.
+    """
+    def __init__(self, id, task):
+        self.id = id
+        self._task = task
+
+    def model_dump(self, mode="python"):
+        metadata = {"run_id": "r1", "task_id": self._task, "agent_role": "lead", "is_subagent": False}
+        if mode == "json":
+            return {"id": self.id, "metadata": metadata, "observations": [],
+                     "timestamp": "2026-07-16T00:00:00"}
+        return {"id": self.id, "metadata": metadata, "observations": [],
+                "timestamp": datetime.datetime(2026, 7, 16)}
+
+
 def test_fetch_session_traces_hydrates_all(atom_home):
     by_id = {"L0": _lead("L0", "t0"), "S0": _sub("S0", "t0")}
     client = _FakeClient([[_summary("L0"), _summary("S0")], []], by_id)
@@ -142,3 +164,20 @@ def test_export_task_rejects_non_terminal(atom_home, monkeypatch):
     _store_with_run(atom_home, "r1", ["running"])
     with pytest.raises(ValueError, match="not completed"):
         export_task(str(atom_home), "r1", 0, "t0", client=_FakeClient([[]], {}))
+
+
+def test_export_run_serializes_trace_dumped_in_json_mode(atom_home, monkeypatch):
+    """A real LangFuse trace's model_dump() (python mode) carries a native datetime — not
+    JSON-serializable. The exporter must request mode="json" so export.json (written via
+    json.dumps) round-trips; if it ever regressed to a no-arg model_dump(), this test would
+    fail with TypeError: Object of type datetime is not JSON serializable.
+    """
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk")
+    _store_with_run(atom_home, "r1", ["succeeded"])
+    by_id = {"L0": _DatetimeInPythonModeTrace("L0", "t0")}
+    client = _FakeClient([[_summary("L0")], []], by_id)
+    result = export_run(str(atom_home), "r1", client=client, now=lambda: "t", sleep=_no_sleep)
+    assert result.complete is True and result.fetched_roots == 1
+    env = json.loads(Path(result.path).read_text())               # would raise if not JSON-safe
+    assert env["roots"][0]["timestamp"] == "2026-07-16T00:00:00"

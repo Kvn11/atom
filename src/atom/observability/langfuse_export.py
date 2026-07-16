@@ -45,17 +45,33 @@ def _langfuse_sdk_version() -> str | None:
 
 
 def _as_dict(obj: Any) -> dict:
+    """Coerce a LangFuse SDK object (or fake) to a plain, JSON-safe dict.
+
+    Prefers ``model_dump(mode="json")`` so datetime/UUID-typed fields (real LangFuse trace
+    objects carry them) come back as JSON-native values before they flow into
+    ``json.dumps(envelope, ...)`` in ``export_run``/``export_task`` — mirroring the LangSmith
+    exporter's ``model_dump(mode="json")`` (see export.py). Falls back to a no-arg call for
+    objects whose ``model_dump``/``dict`` don't accept the ``mode`` kwarg.
+    """
     if isinstance(obj, dict):
         return obj
-    for attr in ("model_dump", "dict"):
-        fn = getattr(obj, attr, None)
-        if callable(fn):
-            return fn()
+    dump = getattr(obj, "model_dump", None)
+    if callable(dump):
+        try:
+            return dump(mode="json")
+        except TypeError:
+            return dump()
+    d = getattr(obj, "dict", None)
+    if callable(d):
+        return d()
     return dict(vars(obj))
 
 
 def _item_id(item: Any) -> str:
-    return getattr(item, "id", None) or (item["id"] if isinstance(item, dict) else None)
+    val = getattr(item, "id", None)
+    if val is not None:
+        return val
+    return item["id"] if isinstance(item, dict) else None
 
 
 def fetch_session_traces(client: Any, run_id: str) -> list[dict]:
