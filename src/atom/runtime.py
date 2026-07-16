@@ -131,6 +131,7 @@ async def run_agent(
             cfg, profile_name, prepared=prepared, checkpointer=cp,
             override_model=override_model, override_thinking=override_thinking,
             override_system_prompt=override_system_prompt, trace=trace, notes=notes,
+            obs_provider=obs_provider,
         )
         run_config = build_run_config(thread_id, prof.recursion_limit, trace, obs_provider)
         inp = {"messages": [HumanMessage(content=content)]}

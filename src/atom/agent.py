@@ -98,6 +98,7 @@ def build_lead_agent(
     override_system_prompt: str | None = None,
     trace: dict | None = None,
     notes: dict | None = None,
+    obs_provider=None,
 ):
     """Construct the compiled lead agent for a profile."""
     from atom.tools.registry import FREQUENT_ELIGIBLE
@@ -163,8 +164,9 @@ def build_lead_agent(
     )
     from atom.observability import enrich_lead_trace, tracing_active
 
+    obs_active = obs_provider is not None and obs_provider.is_active()
     mw_trace = None
-    if trace is not None and tracing_active():
+    if trace is not None and (obs_active or tracing_active()):
         enrich_lead_trace(
             trace, cfg=cfg, profile=profile, profile_name=profile_name,
             system_prompt=system_prompt, context_window=prepared.context_window,
@@ -175,6 +177,7 @@ def build_lead_agent(
     middleware = _build_middlewares(
         cfg, profile, prepared, provider, home, summarizer, library, mw_trace,
         skill_catalog=skill_catalog, retry_policy=retry_policy, notes=notes,
+        obs_provider=obs_provider,
     )
 
     return create_agent(
@@ -209,6 +212,7 @@ def _build_middlewares(
     skill_catalog: list[dict] | None = None,
     retry_policy=None,
     notes: dict | None = None,
+    obs_provider=None,
 ) -> list[AgentMiddleware]:
     # Local imports keep the ordered list readable and avoid import cycles.
     from atom.middleware.clarification import ClarificationMiddleware
@@ -261,6 +265,7 @@ def _build_middlewares(
         recursion_limit=profile.subagents.recursion_limit,
         base_trace=trace,
         observability=cfg.observability,
+        obs_provider=obs_provider,
         retry=policy,
         skill_catalog=skill_catalog or [],
         has_skill_library=library.has_skills,
