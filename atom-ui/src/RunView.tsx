@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
@@ -55,7 +55,40 @@ const mdComponents: Components = {
   },
 };
 
+// The one markdown pipeline, shared by deliverable bodies and assistant transcript messages
+// (GFM + syntax-highlight + safe links). Callers own the container/`.md` class and layout.
+function Markdown({ children }: { children: string }) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      rehypePlugins={[[rehypeHighlight, { detect: true, ignoreMissing: true }]]}
+      components={mdComponents}
+    >
+      {children}
+    </ReactMarkdown>
+  );
+}
+
 type Sel = { step: number; task: string };
+
+// The most-recently presented file set for a task: the last present_files call's `filepaths`,
+// resolved to this task's captured artifacts by virtual `path` (capture preserves `path` even when
+// basenames collide, so joining on it — not `name` — is exact). Missing/unmatched paths drop out.
+function presentedSetFor(chat: ChatMsg[], arts: Artifact[], sel: Sel | null): Artifact[] {
+  if (!sel) return [];
+  const taskArts = arts.filter((a) => a.step === sel.step && a.task === sel.task);
+  if (!taskArts.length) return [];
+  const byPath = new Map(taskArts.map((a) => [a.path, a]));
+  let last: string[] | null = null;
+  for (const m of chat) {
+    for (const c of m.tool_calls ?? []) {
+      if (c.name !== "present_files") continue;
+      const fps = c.args?.filepaths;
+      if (Array.isArray(fps)) last = fps.filter((x): x is string => typeof x === "string");
+    }
+  }
+  return last ? last.map((p) => byPath.get(p)).filter((a): a is Artifact => !!a) : [];
+}
 
 function argSummary(args?: Record<string, unknown>): string {
   if (!args) return "";
@@ -211,7 +244,8 @@ export function RunView({ runId, onBack }: { runId: string; onBack: () => void }
               )}
             </div>
             {tab === "transcript"
-              ? <Transcript runId={runId} sel={sel} status={manifest.status} taskStatus={selTask?.status} />
+              ? <Transcript runId={runId} sel={sel} status={manifest.status} taskStatus={selTask?.status}
+                  arts={arts} onOpenArtifact={(a) => { setOpenArt(a); setTab("deliverables"); }} />
               : <Deliverables runId={runId} arts={arts} open={openArt} setOpen={setOpenArt} />}
           </section>
         </div>
@@ -221,12 +255,14 @@ export function RunView({ runId, onBack }: { runId: string; onBack: () => void }
 }
 
 function Transcript(
-  { runId, sel, status, taskStatus }:
-  { runId: string; sel: Sel | null; status: string; taskStatus?: string },
+  { runId, sel, status, taskStatus, arts, onOpenArtifact }:
+  { runId: string; sel: Sel | null; status: string; taskStatus?: string;
+    arts: Artifact[]; onOpenArtifact: (a: Artifact) => void },
 ) {
   const [chat, setChat] = useState<ChatMsg[]>([]);
   const [pending, setPending] = useState(false);
   const { blocks, streaming } = useTaskStream(runId, sel, taskStatus);
+  const presented = useMemo(() => presentedSetFor(chat, arts, sel), [chat, arts, sel]);
 
   useEffect(() => {
     if (!sel) { setChat([]); return; }
@@ -272,24 +308,61 @@ function Transcript(
   if (!chat.length) return <div className="placeholder">No messages yet for {sel.task}.</div>;
 
   return (
-    <div className="transcript">
-      {chat.map((m, i) => m.tool_calls?.length ? (
-        <div key={i} className="msg tool-calls">
-          {m.text && <div className="msg-text">{m.text}</div>}
-          {m.tool_calls.map((c, k) => (
-            <div key={k} className={`toolcall${c.name === "present_files" ? " present" : ""}`}>
-              <span className="tc-name">{c.name === "present_files" ? "⇪ present_files" : `→ ${c.name}`}</span>
-              <span className="tc-args">{argSummary(c.args)}</span>
-            </div>
-          ))}
-        </div>
-      ) : (
-        <div key={i} className={`msg ${m.role}`}>
-          <div className="msg-role">{m.name || m.role}</div>
-          <div className="msg-text">{m.text}</div>
-        </div>
-      ))}
+    <div className="transcript-split">
+      <div className="transcript">
+        {chat.map((m, i) => m.tool_calls?.length ? (
+          <div key={i} className="msg tool-calls">
+            {m.text && <div className="msg-text md"><Markdown>{m.text}</Markdown></div>}
+            {m.tool_calls.map((c, k) => (
+              <div key={k} className={`toolcall${c.name === "present_files" ? " present" : ""}`}>
+                <span className="tc-name">{c.name === "present_files" ? "⇪ present_files" : `→ ${c.name}`}</span>
+                <span className="tc-args">{argSummary(c.args)}</span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div key={i} className={`msg ${m.role}`}>
+            <div className="msg-role">{m.name || m.role}</div>
+            {m.role === "ai"
+              ? <div className="msg-text md"><Markdown>{m.text}</Markdown></div>
+              : <div className="msg-text">{m.text}</div>}
+          </div>
+        ))}
+      </div>
+      {presented.length > 0 && <PresentedPanel runId={runId} files={presented} onOpen={onOpenArtifact} />}
     </div>
+  );
+}
+
+// Renders the files from a task's most-recent present_files call beside the transcript, each in its
+// own column using the same rich renderer as Deliverables. Other (non-presented) files live in the
+// Deliverables tab; a per-file button opens that file there full-size.
+function PresentedPanel(
+  { runId, files, onOpen }:
+  { runId: string; files: Artifact[]; onOpen: (a: Artifact) => void },
+) {
+  return (
+    <aside className="present-panel">
+      <div className="present-panel-head">
+        <span className="pp-title">Presented files</span>
+        <span className="pp-count">{files.length}</span>
+        <span className="pp-hint">Other files → Deliverables tab</span>
+      </div>
+      <div className="present-panel-body">
+        {files.map((a) => (
+          <div key={a.rel} className="pf-file">
+            <div className="pf-file-head">
+              <span className="pf-name" title={a.path}>{a.name}</span>
+              <span className="pf-size">{fmtSize(a.size)}</span>
+              <button className="pf-open" title="Open in Deliverables" onClick={() => onOpen(a)}>⤢</button>
+            </div>
+            <div className="pf-file-body">
+              <ArtifactBody runId={runId} art={a} />
+            </div>
+          </div>
+        ))}
+      </div>
+    </aside>
   );
 }
 
@@ -346,14 +419,8 @@ function ArtifactBody({ runId, art }: { runId: string; art: Artifact }) {
   if (text === null) return <div className="placeholder">Loading…</div>;
   if (looksBinary(text)) return <DownloadCard art={art} href={raw} note="Binary file — download to view." />;
   if (isMd) return (
-    <div className="art-md">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        rehypePlugins={[[rehypeHighlight, { detect: true, ignoreMissing: true }]]}
-        components={mdComponents}
-      >
-        {text}
-      </ReactMarkdown>
+    <div className="art-md md">
+      <Markdown>{text}</Markdown>
     </div>
   );
   return <CodeView name={art.name} text={text} href={raw} />;
@@ -402,11 +469,20 @@ function useTaskStream(runId: string, sel: Sel | null, taskStatus: string | unde
   const [blocks, setBlocks] = useState<StreamBlock[]>([]);
   const [streaming, setStreaming] = useState(false);
   const esRef = useRef<EventSource | null>(null);
+  const taskKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
     esRef.current?.close();
     esRef.current = null;
-    setBlocks([]);
+    // Reset the live block list ONLY when switching to a DIFFERENT task — not when the same task
+    // merely transitions running -> terminal. Wiping on the terminal transition would erase the
+    // just-streamed transcript of a task that failed before (or without) persisting a chat, which
+    // is exactly what left failed tasks showing "No messages yet".
+    const taskKey = sel ? `${runId}::${sel.step}::${sel.task}` : null;
+    if (taskKey !== taskKeyRef.current) {
+      taskKeyRef.current = taskKey;
+      setBlocks([]);
+    }
     setStreaming(false);
     if (!sel || taskStatus !== "running") return;
 

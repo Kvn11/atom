@@ -147,12 +147,13 @@ table.runs tbody tr:last-child td { border-bottom: 0; }
 .placeholder { padding: 40px; color: var(--ink-3); }
 
 /* Transcript */
-.transcript { flex: 1; overflow-y: auto; padding: 18px 20px; }
+.transcript { flex: 1; min-width: 0; overflow-y: auto; padding: 18px 20px; }
 .msg { margin: 0 0 14px; }
 .msg-role { font-size: 11.5px; text-transform: uppercase; letter-spacing: .03em; color: var(--ink-3); font-weight: 600; margin-bottom: 4px; }
 .msg.human .msg-text, .msg.task .msg-text { background: var(--accent-weak); }
 .msg-text { white-space: pre-wrap; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px 12px; }
 .msg.ai .msg-text { background: var(--surface); }
+.msg-text.md { white-space: normal; }   /* markdown controls its own spacing (shared .md rules) */
 .tool-calls { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 10px; }
 .tool-calls .msg-text { background: transparent; border: 0; padding: 0 0 6px; }
 .toolcall { display: flex; gap: 10px; font-family: var(--mono); font-size: 12.5px; padding: 3px 0; }
@@ -165,6 +166,28 @@ table.runs tbody tr:last-child td { border-bottom: 0; }
   background: var(--accent); animation: blink 1s steps(2, start) infinite; }
 @keyframes blink { to { visibility: hidden; } }
 
+/* Presented-files side panel — files from a task's most-recent present_files call, beside the transcript */
+.transcript-split { flex: 1; min-height: 0; display: flex; }
+.present-panel { flex: 0 1 clamp(320px, 42%, 560px); min-width: 0; min-height: 0; display: flex; flex-direction: column;
+  border-left: 1px solid var(--border); background: var(--surface); }
+.present-panel-head { display: flex; align-items: baseline; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--border); }
+.pp-title { font-weight: 600; font-size: 13px; }
+.pp-count { font-size: 11px; color: #fff; background: var(--accent); border-radius: 999px; padding: 1px 7px; font-weight: 650; }
+.pp-hint { margin-left: auto; font-size: 11.5px; color: var(--ink-3); }
+.present-panel-body { flex: 1; min-height: 0; display: flex; overflow-x: auto; }
+.pf-file { flex: 0 0 auto; width: min(440px, 82vw); min-width: 280px; min-height: 0; display: flex; flex-direction: column;
+  border-right: 1px solid var(--border); }
+.pf-file:last-child { border-right: 0; }
+.pf-file-head { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border); }
+.pf-name { flex: 1; min-width: 0; font-family: var(--mono); font-size: 12.5px; font-weight: 550;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pf-size { font-size: 11.5px; color: var(--ink-3); white-space: nowrap; }
+.pf-open { border: 0; background: transparent; color: var(--ink-2); font-size: 14px; line-height: 1; padding: 2px 6px; border-radius: 5px; }
+.pf-open:hover { background: var(--surface-2); color: var(--ink); }
+.pf-file-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.pf-file .art-md { max-width: none; margin: 0; padding: 14px 16px; }
+.pf-file .art-img { padding: 12px; }
+
 /* Deliverables */
 .gallery { flex: 1; overflow-y: auto; padding: 18px 20px; display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; align-content: start; }
 .gal-card { text-align: left; border: 1px solid var(--border); background: var(--surface); border-radius: var(--radius); padding: 14px; box-shadow: var(--shadow); }
@@ -176,29 +199,34 @@ table.runs tbody tr:last-child td { border-bottom: 0; }
 .viewer-head { display: flex; align-items: center; gap: 14px; padding: 12px 20px; border-bottom: 1px solid var(--border); }
 .viewer-head .link { margin: 0; }
 .viewer-name { font-weight: 600; }
+/* .art-md keeps the deliverable-viewer LAYOUT; typography is shared via .md (see below). */
 .art-md, .art-img { flex: 1; overflow: auto; padding: 20px 24px; }
 .art-img { display: flex; align-items: flex-start; justify-content: center; background: var(--surface-2); }
 .art-img img { max-width: 100%; height: auto; border-radius: var(--radius-sm); box-shadow: var(--shadow); }
 .art-md { max-width: 780px; margin: 0 auto; }
-.art-md > :first-child { margin-top: 0; }
-.art-md h1, .art-md h2, .art-md h3, .art-md h4 { letter-spacing: -0.01em; margin: 1.2em 0 .5em; }
-.art-md h1 { font-size: 24px; } .art-md h2 { font-size: 19px; } .art-md h3 { font-size: 16px; } .art-md h4 { font-size: 14px; }
-.art-md p { margin: 0 0 1em; }
-.art-md pre { background: var(--surface-2); border: 1px solid var(--border); padding: 12px 14px; border-radius: var(--radius-sm); overflow: auto; font-family: var(--mono); font-size: 12.5px; line-height: 1.5; tab-size: 4; }
-.art-md code { font-family: var(--mono); font-size: .9em; background: var(--surface-2); border: 1px solid var(--border); padding: 1px 5px; border-radius: 4px; }
-.art-md pre code, .art-code-body pre code { background: transparent; border: 0; padding: 0; }
-.art-md img { max-width: 100%; height: auto; border-radius: var(--radius-sm); }
-.art-md ul, .art-md ol { padding-left: 1.4em; margin: 0 0 1em; }
-.art-md li { margin: .2em 0; }
-.art-md .contains-task-list { list-style: none; padding-left: 0; }
-.art-md .task-list-item { display: flex; align-items: baseline; gap: 8px; }
-.art-md li input[type="checkbox"] { margin: 0; }
-.art-md hr { border: 0; border-top: 1px solid var(--border); margin: 1.6em 0; }
-.art-md a { color: var(--accent); text-decoration: none; } .art-md a:hover { text-decoration: underline; }
-.art-md table { border-collapse: collapse; display: block; overflow-x: auto; }
-.art-md th, .art-md td { border: 1px solid var(--border); padding: 6px 10px; }
-.art-md th { background: var(--surface-2); }
-.art-md blockquote { border-left: 3px solid var(--border-strong); margin: 0 0 1em; padding-left: 14px; color: var(--ink-2); }
+
+/* Shared markdown typography — deliverable bodies (.art-md.md), assistant transcript messages
+   (.msg-text.md), and presented-file columns all carry .md so they render identically. */
+.md > :first-child { margin-top: 0; }
+.md > :last-child { margin-bottom: 0; }
+.md h1, .md h2, .md h3, .md h4 { letter-spacing: -0.01em; margin: 1.2em 0 .5em; }
+.md h1 { font-size: 24px; } .md h2 { font-size: 19px; } .md h3 { font-size: 16px; } .md h4 { font-size: 14px; }
+.md p { margin: 0 0 1em; }
+.md pre { background: var(--surface-2); border: 1px solid var(--border); padding: 12px 14px; border-radius: var(--radius-sm); overflow: auto; font-family: var(--mono); font-size: 12.5px; line-height: 1.5; tab-size: 4; }
+.md code { font-family: var(--mono); font-size: .9em; background: var(--surface-2); border: 1px solid var(--border); padding: 1px 5px; border-radius: 4px; }
+.md pre code, .art-code-body pre code { background: transparent; border: 0; padding: 0; }
+.md img { max-width: 100%; height: auto; border-radius: var(--radius-sm); }
+.md ul, .md ol { padding-left: 1.4em; margin: 0 0 1em; }
+.md li { margin: .2em 0; }
+.md .contains-task-list { list-style: none; padding-left: 0; }
+.md .task-list-item { display: flex; align-items: baseline; gap: 8px; }
+.md li input[type="checkbox"] { margin: 0; }
+.md hr { border: 0; border-top: 1px solid var(--border); margin: 1.6em 0; }
+.md a { color: var(--accent); text-decoration: none; } .md a:hover { text-decoration: underline; }
+.md table { border-collapse: collapse; display: block; overflow-x: auto; }
+.md th, .md td { border: 1px solid var(--border); padding: 6px 10px; }
+.md th { background: var(--surface-2); }
+.md blockquote { border-left: 3px solid var(--border-strong); margin: 0 0 1em; padding-left: 14px; color: var(--ink-2); }
 
 /* Whole-file source view (non-markdown deliverables) */
 .art-doc { flex: 1; min-height: 0; display: flex; flex-direction: column; }
