@@ -400,6 +400,17 @@ class WorkflowEngine:
                     coalesce_ms=self.cfg.streaming.coalesce_ms,
                     coalesce_chars=self.cfg.streaming.coalesce_chars,
                 )
+            def _persist_partial(msgs: list) -> None:
+                # If run_agent fails mid-run it hands back whatever transcript the checkpointer
+                # holds; persist it (same shape as the success path) so a FAILED task still shows
+                # what it did instead of "No messages yet". Best-effort — never mask the failure.
+                try:
+                    self.store.save_chat(
+                        manifest.run_id, step_state.index, ts.id, serialize_messages(msgs)
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+
             coro = run_agent(
                 prompt, config=self._task_cfg, profile=self.profile,
                 override_model=td.model, override_thinking=td.thinking,
@@ -408,6 +419,7 @@ class WorkflowEngine:
                 notes=notes.as_prompt_ctx() if notes else None,
                 on_event=(emitter.emit if emitter else None),
                 obs_provider=self.obs_provider,
+                on_transcript=_persist_partial,
             )
             result = await (asyncio.wait_for(coro, timeout) if timeout else coro)
             self.store.save_chat(
