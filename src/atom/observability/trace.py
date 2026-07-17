@@ -54,17 +54,20 @@ class ObservabilityStatus:
     reason: str
 
 
-def apply_observability_env(cfg: AtomConfig) -> ObservabilityStatus:
+def apply_observability_env(cfg: AtomConfig, *, force_enable: bool = False) -> ObservabilityStatus:
     """Map the observability config block onto LANGSMITH_* env, never overwriting existing vars.
 
-    Tracing is enabled only when requested AND an API key is present, so a half-configured setup is a
-    safe no-op rather than a crash or a keyless export attempt. Idempotent. Returns a status describing
-    whether tracing is (now) active so callers can surface a one-line activation notice.
+    Tracing is enabled when requested (``observability.enabled`` OR ``force_enable`` — the latter set
+    when the user selects ``provider: langsmith`` explicitly) AND an API key is present, OR when
+    ``LANGSMITH_TRACING`` is already set in the environment. A half-configured setup is a safe no-op
+    rather than a crash. Idempotent. Returns a status describing whether tracing is (now) active so
+    callers can surface a one-line activation notice.
     """
     obs = cfg.observability
     tracing_on = tracing_active()
     have_key = bool(os.environ.get("LANGSMITH_API_KEY"))
-    will_enable = bool(obs.enabled and have_key and not os.environ.get("LANGSMITH_TRACING"))
+    want_enable = obs.enabled or force_enable
+    will_enable = bool(want_enable and have_key and not os.environ.get("LANGSMITH_TRACING"))
     if (tracing_on or will_enable) and obs.project and not os.environ.get("LANGSMITH_PROJECT"):
         os.environ["LANGSMITH_PROJECT"] = obs.project
     if will_enable:
@@ -76,7 +79,7 @@ def apply_observability_env(cfg: AtomConfig) -> ObservabilityStatus:
             project=os.environ.get("LANGSMITH_PROJECT") or obs.project,
             reason="active",
         )
-    if obs.enabled and not have_key:
+    if want_enable and not have_key:
         return ObservabilityStatus(active=False, project=obs.project, reason="enabled-but-no-api-key")
     return ObservabilityStatus(active=False, project=None, reason="disabled")
 

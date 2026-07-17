@@ -15,8 +15,8 @@ import logging
 import os
 from typing import Any
 
-from atom.config.schema import AtomConfig
-from atom.observability.trace import apply_observability_env, git_sha
+from atom.config.schema import AtomConfig, ObservabilityConfig
+from atom.observability.trace import apply_observability_env, git_sha, tracing_active
 
 logger = logging.getLogger(__name__)
 
@@ -56,8 +56,10 @@ class LangSmithProvider(ObservabilityProvider):
 
     name = "langsmith"
 
-    def __init__(self, cfg: AtomConfig) -> None:
-        self.status = apply_observability_env(cfg)   # maps config -> LANGSMITH_* env (idempotent)
+    def __init__(self, cfg: AtomConfig, *, force_enable: bool = False) -> None:
+        # force_enable=True when the user selected `provider: langsmith` explicitly, so an API key
+        # alone activates tracing without also requiring the legacy `observability.enabled` flag.
+        self.status = apply_observability_env(cfg, force_enable=force_enable)
 
     def is_active(self) -> bool:
         return self.status.active
@@ -120,19 +122,49 @@ def _default_langfuse_factory(lf: Any, public: str, secret: str) -> tuple[Any, A
     return client, CallbackHandler()                  # binds to the global client by public_key
 
 
+def resolve_langfuse_keys(obs: ObservabilityConfig) -> tuple[str | None, str | None, str | None]:
+    """Resolve LangFuse (public, secret, host) from config.yaml with LANGFUSE_* env fallback.
+
+    Single source of truth for BOTH the live-tracing path (build_provider) and the exporter
+    (langfuse_export), so a user who configures keys in config.yaml can both trace AND export.
+    """
+    lf = obs.langfuse
+    public = lf.public_key or os.environ.get("LANGFUSE_PUBLIC_KEY")
+    secret = lf.secret_key or os.environ.get("LANGFUSE_SECRET_KEY")
+    host = lf.host or os.environ.get("LANGFUSE_HOST")
+    return public, secret, host
+
+
+def _disable_env_langsmith_tracing() -> None:
+    """Enforce 'exactly one backend': when provider=langfuse, silence env-driven LangSmith so
+    LangChain's global tracer does not ALSO auto-upload every run to LangSmith."""
+    if tracing_active():
+        os.environ["LANGSMITH_TRACING"] = "false"
+        logger.warning(
+            "observability: provider=langfuse -> disabling env LANGSMITH_TRACING so exactly one "
+            "backend is active (was set in the environment)"
+        )
+
+
 def build_provider(cfg: AtomConfig, *, langfuse_factory: Any = None) -> ObservabilityProvider:
     """Resolve cfg.observability into an active provider (or NullProvider). Logs status; never raises.
 
+    Resolution: an explicit ``provider`` wins; ``provider`` unset falls back to LangSmith when the
+    legacy ``enabled`` flag is set OR ``LANGSMITH_TRACING`` is active in the environment, else none.
+    Selecting ``provider: langsmith`` activates on an API key alone (force_enable). Selecting
+    ``provider: langfuse`` disables any env-driven LangSmith so exactly one backend uploads.
+
     ``langfuse_factory`` is a test seam: a callable ``(langfuse_cfg, public_key, secret_key) ->
-    (client, handler)``. Defaults to the real constructor (added in Task 3).
+    (client, handler)``.
     """
     obs = cfg.observability
     provider = obs.provider
-    if provider is None:                              # legacy fallback
-        provider = "langsmith" if obs.enabled else "none"
+    explicit_langsmith = provider == "langsmith"
+    if provider is None:                              # legacy fallback (config OR env activation)
+        provider = "langsmith" if (obs.enabled or tracing_active()) else "none"
 
     if provider == "langsmith":
-        p = LangSmithProvider(cfg)
+        p = LangSmithProvider(cfg, force_enable=explicit_langsmith)
         if p.status.active:
             logger.info("observability: langsmith tracing active -> project %r", p.status.project)
         elif p.status.reason == "enabled-but-no-api-key":
@@ -143,30 +175,35 @@ def build_provider(cfg: AtomConfig, *, langfuse_factory: Any = None) -> Observab
         return p
 
     if provider == "langfuse":
-        return _build_langfuse_provider(obs, langfuse_factory)   # implemented in Task 3
+        _disable_env_langsmith_tracing()
+        return _build_langfuse_provider(obs, langfuse_factory)
 
     return NullProvider()
 
 
-def _build_langfuse_provider(obs: Any, langfuse_factory: Any) -> ObservabilityProvider:
-    lf = obs.langfuse
-    public = lf.public_key or os.environ.get("LANGFUSE_PUBLIC_KEY")
-    secret = lf.secret_key or os.environ.get("LANGFUSE_SECRET_KEY")
+def _build_langfuse_provider(obs: ObservabilityConfig, langfuse_factory: Any) -> ObservabilityProvider:
+    public, secret, host = resolve_langfuse_keys(obs)
     if not (public and secret):
         logger.warning(
             "observability: provider=langfuse but LANGFUSE_PUBLIC_KEY/LANGFUSE_SECRET_KEY missing "
-            "-- traces will NOT be uploaded"
+            "(and not set in observability.langfuse) -- traces will NOT be uploaded"
         )
         return NullProvider()
     factory = langfuse_factory or _default_langfuse_factory
     try:
-        client, handler = factory(lf, public, secret)
+        client, handler = factory(obs.langfuse, public, secret)
     except ImportError:
         logger.warning(
             "observability: provider=langfuse but the 'langfuse' package is not installed "
             "-- run `pip install 'langfuse>=3,<4'`"
         )
         return NullProvider()
+    except Exception as exc:  # noqa: BLE001 — telemetry must NEVER break a run (e.g. bad host/keys)
+        logger.warning(
+            "observability: provider=langfuse failed to initialize (%s: %s) "
+            "-- traces will NOT be uploaded", type(exc).__name__, exc
+        )
+        return NullProvider()
     logger.info("observability: langfuse tracing active -> host %r",
-                lf.host or os.environ.get("LANGFUSE_HOST") or "https://cloud.langfuse.com")
+                host or "https://cloud.langfuse.com")
     return LangFuseProvider(client, handler)

@@ -120,6 +120,7 @@ def export_run(
     run_id: str,
     *,
     project: str | None = None,
+    cfg: Any = None,                # accepted for dispatch parity with langfuse_export; unused here
     client: Any | None = None,
     poll_timeout: float = 30.0,
     poll_interval: float = 2.0,
@@ -183,6 +184,7 @@ def export_task(
     task_id: str,
     *,
     project: str | None = None,
+    cfg: Any = None,                # accepted for dispatch parity with langfuse_export; unused here
     client: Any | None = None,
     poll_timeout: float = 30.0,
     poll_interval: float = 2.0,

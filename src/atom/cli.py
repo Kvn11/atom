@@ -62,16 +62,28 @@ def run(
 ) -> None:
     """Run the agent once on TASK."""
     _load_env()
+    from atom.observability import build_provider
+
+    obs_provider = None
     try:
+        cfg = load_config(config)
+        obs_provider = build_provider(cfg)   # never raises; NullProvider unless tracing configured
         with console.status("[bold]thinking…[/bold]"):
             result = asyncio.run(run_agent(
-                task, config_path=config, profile=profile, override_model=model,
+                task, config=cfg, profile=profile, override_model=model,
                 override_thinking=thinking, override_system_prompt=system_prompt,
                 workspace=workspace, thread_id=thread, user_id=user,
+                obs_provider=obs_provider,
             ))
     except (ProviderUnavailableError, ValidationError, KeyError, FileNotFoundError) as e:
         console.print(f"[red]Error: {type(e).__name__}: {e}[/red]")
         raise typer.Exit(1)
+    finally:
+        if obs_provider is not None:
+            try:
+                obs_provider.flush()          # drain the trace queue before the process exits
+            except Exception:  # noqa: BLE001 — telemetry flush must never break the CLI
+                pass
     _print_activity(result)
     console.print()
     if result.awaiting_clarification:
@@ -95,6 +107,14 @@ def chat(
 ) -> None:
     """Interactive REPL on a single thread (type 'exit' to quit)."""
     _load_env()
+    from atom.observability import build_provider
+
+    try:
+        cfg = load_config(config)
+    except (ValidationError, KeyError, FileNotFoundError) as e:
+        console.print(f"[red]Error: {type(e).__name__}: {e}[/red]")
+        raise typer.Exit(1)
+    obs_provider = build_provider(cfg)   # built once for the session; NullProvider unless configured
     tid = thread
     console.print("[bold]atom chat[/bold] — type 'exit' to quit.\n")
     while True:
@@ -109,15 +129,21 @@ def chat(
         try:
             with console.status("[bold]thinking…[/bold]"):
                 result = asyncio.run(run_agent(
-                    task, config_path=config, profile=profile, override_model=model,
+                    task, config=cfg, profile=profile, override_model=model,
                     override_thinking=thinking, override_system_prompt=system_prompt,
                     # Keep the ORIGINAL workspace across turns: pinning the thread already reuses a
                     # 'new' per-thread dir, and an 'existing' bind MUST persist (don't reset to 'new').
                     workspace=workspace, thread_id=tid, user_id=user,
+                    obs_provider=obs_provider,
                 ))
         except (ProviderUnavailableError, ValidationError, KeyError, FileNotFoundError) as e:
             console.print(f"[red]Error: {type(e).__name__}: {e}[/red]")
             continue
+        finally:
+            try:
+                obs_provider.flush()     # drain traces per turn (no-op unless tracing is active)
+            except Exception:  # noqa: BLE001 — telemetry flush must never break the REPL
+                pass
         tid = result.thread_id           # pin the thread for the rest of the session
         console.print(f"[bold green]atom ›[/bold green] {result.final_text}\n")
 
@@ -300,7 +326,7 @@ def _export_one_task(export_mod, cfg, proj: str, run_id, latest, all_workflow, t
         raise typer.Exit(1)
     rid = run_ids[0]
     try:
-        result = export_mod.export_task(cfg.home, rid, step_index, task_id, project=proj)
+        result = export_mod.export_task(cfg.home, rid, step_index, task_id, project=proj, cfg=cfg)
     except FileNotFoundError:
         console.print(f"[red]run '{rid}' not found[/red]")
         raise typer.Exit(1)
@@ -342,8 +368,11 @@ def workflow_export(
 
     if provider == "langfuse":
         proj = None                                       # LangFuse has no --project concept here
-        if not (os.environ.get("LANGFUSE_PUBLIC_KEY") and os.environ.get("LANGFUSE_SECRET_KEY")):
-            console.print("[red]set LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY to export from LangFuse[/red]")
+        from atom.observability.provider import resolve_langfuse_keys
+        public, secret, _ = resolve_langfuse_keys(cfg.observability)   # config.yaml keys OR env
+        if not (public and secret):
+            console.print("[red]set LANGFUSE_PUBLIC_KEY/LANGFUSE_SECRET_KEY (or observability.langfuse "
+                          "keys in config) to export from LangFuse[/red]")
             raise typer.Exit(1)
     else:
         proj = project or cfg.observability.project
@@ -366,7 +395,7 @@ def workflow_export(
     errors = False
     for rid in run_ids:
         try:
-            result = export_mod.export_run(cfg.home, rid, project=proj)
+            result = export_mod.export_run(cfg.home, rid, project=proj, cfg=cfg)
         except FileNotFoundError:
             console.print(f"[red]run '{rid}' not found[/red]")
             errors = True

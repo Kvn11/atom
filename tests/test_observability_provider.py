@@ -26,7 +26,10 @@ def test_null_provider_is_inert():
     p.flush()                                          # no raise
 
 
-def test_build_provider_none_when_unset_and_disabled():
+def test_build_provider_none_when_unset_and_disabled(monkeypatch):
+    # Resolution now honors env activation (env-only LANGSMITH_TRACING -> LangSmith), so pin the env
+    # this asserts on rather than inheriting an ambient/leaked LANGSMITH_TRACING.
+    monkeypatch.delenv("LANGSMITH_TRACING", raising=False)
     assert isinstance(build_provider(_cfg()), NullProvider)
 
 
@@ -166,3 +169,75 @@ def test_build_provider_langfuse_import_error_degrades(monkeypatch, caplog):
         p = build_provider(_cfg(provider="langfuse"), langfuse_factory=raising_factory)
     assert isinstance(p, NullProvider)
     assert "langfuse' package is not installed" in caplog.text
+
+
+# --- review-fix behaviors ---------------------------------------------------
+
+def test_build_provider_langfuse_non_import_error_degrades(monkeypatch, caplog):
+    """A non-ImportError from the langfuse factory (bad sample_rate/host/auth) must degrade to
+    NullProvider, never propagate out of build_provider into WorkflowEngine.__init__."""
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk")
+
+    def raising_factory(lf, public, secret):
+        raise ValueError("Sample rate must be between 0.0 and 1.0")
+
+    with caplog.at_level(logging.WARNING):
+        p = build_provider(_cfg(provider="langfuse"), langfuse_factory=raising_factory)
+    assert isinstance(p, NullProvider)
+    assert "failed to initialize" in caplog.text
+
+
+def test_langfuse_disables_env_langsmith_tracing(monkeypatch):
+    """provider=langfuse must silence env-driven LangSmith so exactly one backend uploads."""
+    import os
+    monkeypatch.setenv("LANGSMITH_TRACING", "true")
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk")
+    p = build_provider(_cfg(provider="langfuse"),
+                       langfuse_factory=lambda lf, pub, sec: (_FakeLFClient(), _FakeHandler()))
+    assert isinstance(p, LangFuseProvider)
+    assert os.environ.get("LANGSMITH_TRACING") == "false"
+
+
+def test_explicit_langsmith_activates_without_enabled(monkeypatch):
+    """provider=langsmith activates on an API key alone (no legacy enabled=True required)."""
+    import os
+    monkeypatch.setenv("LANGSMITH_API_KEY", "k")
+    monkeypatch.delenv("LANGSMITH_TRACING", raising=False)
+    monkeypatch.delenv("LANGSMITH_PROJECT", raising=False)
+    p = build_provider(_cfg(provider="langsmith"))   # enabled defaults False
+    assert isinstance(p, LangSmithProvider) and p.is_active() is True
+    assert os.environ.get("LANGSMITH_TRACING") == "true"
+
+
+def test_legacy_env_only_langsmith_resolves_to_active_langsmith(monkeypatch):
+    """provider unset + enabled False + env LANGSMITH_TRACING=true -> active LangSmithProvider,
+    so the end-of-run flush is not silently dropped (was: NullProvider)."""
+    monkeypatch.setenv("LANGSMITH_TRACING", "true")
+    monkeypatch.setenv("LANGSMITH_API_KEY", "k")
+    p = build_provider(_cfg())     # provider unset, enabled False
+    assert isinstance(p, LangSmithProvider) and p.is_active() is True
+
+
+def test_env_only_langsmith_maps_project(monkeypatch):
+    """Env-activated tracing still maps observability.project -> LANGSMITH_PROJECT."""
+    import os
+    monkeypatch.setenv("LANGSMITH_TRACING", "true")
+    monkeypatch.setenv("LANGSMITH_API_KEY", "k")
+    monkeypatch.delenv("LANGSMITH_PROJECT", raising=False)
+    build_provider(_cfg(project="myproj"))
+    assert os.environ.get("LANGSMITH_PROJECT") == "myproj"
+
+
+def test_resolve_langfuse_keys_prefers_config_over_env(monkeypatch):
+    from atom.observability.provider import resolve_langfuse_keys
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "env_pk")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "env_sk")
+    monkeypatch.delenv("LANGFUSE_HOST", raising=False)
+    obs = ObservabilityConfig(
+        provider="langfuse",
+        langfuse={"public_key": "cfg_pk", "secret_key": "cfg_sk", "host": "http://lf"},
+    )
+    assert resolve_langfuse_keys(obs) == ("cfg_pk", "cfg_sk", "http://lf")
+    assert resolve_langfuse_keys(ObservabilityConfig()) == ("env_pk", "env_sk", None)

@@ -232,8 +232,11 @@ def create_app(cfg: AtomConfig | None = None, engine: WorkflowEngine | None = No
             provider = "langsmith" if cfg.observability.enabled else "none"
         if provider == "langfuse":
             from atom.observability import langfuse_export as export_mod
-            if not (os.environ.get("LANGFUSE_PUBLIC_KEY") and os.environ.get("LANGFUSE_SECRET_KEY")):
-                raise HTTPException(503, "export not configured: set LANGFUSE_PUBLIC_KEY/LANGFUSE_SECRET_KEY")
+            from atom.observability.provider import resolve_langfuse_keys
+            public, secret, _ = resolve_langfuse_keys(cfg.observability)   # config.yaml keys OR env
+            if not (public and secret):
+                raise HTTPException(503, "export not configured: set LANGFUSE_PUBLIC_KEY/LANGFUSE_SECRET_KEY "
+                                         "(or observability.langfuse keys)")
             proj = None
         else:
             from atom.observability import export as export_mod
@@ -243,9 +246,9 @@ def create_app(cfg: AtomConfig | None = None, engine: WorkflowEngine | None = No
         body = body or ExportRequest()
         try:
             if body.step is not None and body.task is not None:
-                res = export_mod.export_task(cfg.home, run_id, body.step, body.task, project=proj)
+                res = export_mod.export_task(cfg.home, run_id, body.step, body.task, project=proj, cfg=cfg)
             else:
-                res = export_mod.export_run(cfg.home, run_id, project=proj)
+                res = export_mod.export_run(cfg.home, run_id, project=proj, cfg=cfg)
         except FileNotFoundError:
             raise HTTPException(404, "run not found")
         except KeyError as e:                                 # unknown step/task

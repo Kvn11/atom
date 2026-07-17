@@ -120,7 +120,9 @@ class LangfuseConfig(_Base):
     secret_key: Optional[str] = None      # or LANGFUSE_SECRET_KEY
     environment: Optional[str] = None     # optional LangFuse "environment" tag
     release: Optional[str] = None         # optional; falls back to captured git sha
-    sample_rate: float = 1.0              # 0.0..1.0
+    # Bounded at load time: the LangFuse SDK rejects out-of-range values with a ValueError,
+    # so validate here to surface a misconfig as a clean ValidationError, not a runtime crash.
+    sample_rate: float = Field(default=1.0, ge=0.0, le=1.0)
 
 
 class ObservabilityConfig(_Base):

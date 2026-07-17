@@ -54,3 +54,17 @@ def test_observability_provider_rejects_unknown():
     from pydantic import ValidationError
     with pytest.raises(ValidationError):
         ObservabilityConfig(provider="datadog")
+
+
+def test_langfuse_sample_rate_is_bounded():
+    """Out-of-range sample_rate must fail at config LOAD (clean ValidationError), not crash the
+    LangFuse SDK constructor at provider-build time."""
+    import pytest
+    from pydantic import ValidationError
+    from atom.config.schema import LangfuseConfig
+    with pytest.raises(ValidationError):
+        LangfuseConfig(sample_rate=1.5)
+    with pytest.raises(ValidationError):
+        LangfuseConfig(sample_rate=-0.1)
+    assert LangfuseConfig(sample_rate=0.0).sample_rate == 0.0
+    assert LangfuseConfig(sample_rate=1.0).sample_rate == 1.0

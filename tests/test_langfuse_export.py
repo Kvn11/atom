@@ -80,8 +80,14 @@ def _summary(id):
 def _no_sleep(_s): pass
 
 
-def _lead(id, task): return _Trace(id, {"run_id": "r1", "task_id": task, "agent_role": "lead", "is_subagent": False})
-def _sub(id, task): return _Trace(id, {"run_id": "r1", "task_id": task, "agent_role": "subagent", "is_subagent": True})
+def _lead(id, task, step=0):
+    return _Trace(id, {"run_id": "r1", "task_id": task, "step_index": step,
+                       "agent_role": "lead", "is_subagent": False})
+
+
+def _sub(id, task, step=0):
+    return _Trace(id, {"run_id": "r1", "task_id": task, "step_index": step,
+                       "agent_role": "subagent", "is_subagent": True})
 
 
 class _DatetimeInPythonModeTrace:
@@ -216,3 +222,82 @@ def test_export_run_records_real_sdk_version(atom_home, monkeypatch):
     env = json.loads(Path(result.path).read_text())
     assert env["sdk_version"] is not None
     assert re.match(r"\d+\.\d+", env["sdk_version"])
+
+
+# --- review-fix behaviors ---------------------------------------------------
+
+def test_export_run_no_lead_traces_writes_nothing(atom_home, monkeypatch):
+    """Only sub-agent traces present (lead not yet uploaded) -> no export.json (parity w/ LangSmith)."""
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk")
+    store = _store_with_run(atom_home, "r1", ["succeeded"])
+    by_id = {"S0": _sub("S0", "t0")}
+    client = _FakeClient([[_summary("S0")], []], by_id)
+    clock = iter([0.0, 100.0])
+    result = export_run(str(atom_home), "r1", client=client, now=lambda: "t",
+                        sleep=_no_sleep, monotonic=lambda: next(clock))
+    assert result.fetched_roots == 0 and result.path == ""
+    assert not (store.run_dir("r1") / "export.json").exists()
+
+
+def test_export_task_no_lead_trace_is_incomplete(atom_home, monkeypatch):
+    """A task match set with only a sub-agent trace must NOT be written as complete with 0 leads."""
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk")
+    store = _store_with_run(atom_home, "r1", ["succeeded"])
+    by_id = {"S0": _sub("S0", "t0")}
+    client = _FakeClient([[_summary("S0")], []], by_id)
+    clock = iter([0.0, 100.0])
+    result = export_task(str(atom_home), "r1", 0, "t0", client=client, now=lambda: "t",
+                         sleep=_no_sleep, monotonic=lambda: next(clock))
+    assert result.complete is False and result.fetched_roots == 0 and result.path == ""
+    assert not (store.run_dir("r1") / "exports" / "s0__t0.json").exists()
+
+
+def test_export_task_scopes_by_step_index(atom_home):
+    """A task id reused across steps must pull ONLY the requested step's traces."""
+    store = RunStore(str(atom_home))
+    m = RunManifest(
+        run_id="r1", workflow="wf", created_at="2026-07-16T00:00:00",
+        workspace_path=str(store.workspace_dir("r1")),
+        steps=[
+            StepState(index=0, title="A",
+                      tasks=[TaskState(id="writer", thread_id="r1:s0:writer", status="succeeded")]),
+            StepState(index=1, title="B",
+                      tasks=[TaskState(id="writer", thread_id="r1:s1:writer", status="succeeded")]),
+        ],
+    )
+    store.create(m)
+    import os
+    os.environ["LANGFUSE_PUBLIC_KEY"] = "pk"
+    os.environ["LANGFUSE_SECRET_KEY"] = "sk"
+    try:
+        by_id = {"L0": _lead("L0", "writer", step=0), "L1": _lead("L1", "writer", step=1)}
+        client = _FakeClient([[_summary("L0"), _summary("L1")], []], by_id)
+        result = export_task(str(atom_home), "r1", 0, "writer", client=client,
+                             now=lambda: "t", sleep=_no_sleep)
+    finally:
+        os.environ.pop("LANGFUSE_PUBLIC_KEY", None)
+        os.environ.pop("LANGFUSE_SECRET_KEY", None)
+    env = json.loads(Path(result.path).read_text())
+    assert {t["id"] for t in env["roots"]} == {"L0"}    # only step 0's 'writer', NOT step 1's
+    assert result.fetched_roots == 1
+
+
+def test_export_run_accepts_config_keys(atom_home, monkeypatch):
+    """cfg with config.yaml langfuse keys (no env) satisfies the export credential guard."""
+    monkeypatch.delenv("LANGFUSE_PUBLIC_KEY", raising=False)
+    monkeypatch.delenv("LANGFUSE_SECRET_KEY", raising=False)
+    from atom.config.schema import AtomConfig, ObservabilityConfig
+    cfg = AtomConfig(
+        home=str(atom_home),
+        observability=ObservabilityConfig(
+            provider="langfuse",
+            langfuse={"public_key": "cfg_pk", "secret_key": "cfg_sk"},
+        ),
+    )
+    _store_with_run(atom_home, "r1", ["succeeded"])
+    by_id = {"L0": _lead("L0", "t0")}
+    client = _FakeClient([[_summary("L0")], []], by_id)
+    result = export_run(str(atom_home), "r1", cfg=cfg, client=client, now=lambda: "t", sleep=_no_sleep)
+    assert result.complete is True and result.fetched_roots == 1

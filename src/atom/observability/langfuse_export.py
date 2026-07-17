@@ -24,15 +24,31 @@ from atom.observability.export import (
 from atom.workflow.run_store import RunStore
 
 
-def _require_keys() -> None:
-    if not (os.environ.get("LANGFUSE_PUBLIC_KEY") and os.environ.get("LANGFUSE_SECRET_KEY")):
+def _resolve_keys(cfg: Any) -> tuple[str | None, str | None, str | None]:
+    """(public, secret, host) from config.yaml with LANGFUSE_* env fallback, mirroring the
+    live-tracing path so a config-only user can both trace AND export. cfg=None -> env only."""
+    if cfg is None:
+        return (os.environ.get("LANGFUSE_PUBLIC_KEY"),
+                os.environ.get("LANGFUSE_SECRET_KEY"),
+                os.environ.get("LANGFUSE_HOST"))
+    from atom.observability.provider import resolve_langfuse_keys
+    return resolve_langfuse_keys(cfg.observability)
+
+
+def _require_keys(cfg: Any = None) -> None:
+    public, secret, _ = _resolve_keys(cfg)
+    if not (public and secret):
         raise RuntimeError(
-            "LANGFUSE_PUBLIC_KEY/LANGFUSE_SECRET_KEY are not set — cannot export from LangFuse"
+            "LANGFUSE_PUBLIC_KEY/LANGFUSE_SECRET_KEY are not set (and not in observability.langfuse) "
+            "— cannot export from LangFuse"
         )
 
 
-def _default_client() -> Any:
+def _default_client(cfg: Any = None) -> Any:
     from langfuse import Langfuse
+    public, secret, host = _resolve_keys(cfg)
+    if public and secret:
+        return Langfuse(public_key=public, secret_key=secret, host=host)
     return Langfuse()
 
 
@@ -114,6 +130,7 @@ def export_run(
     run_id: str,
     *,
     project: str | None = None,          # unused for LangFuse; kept for signature parity
+    cfg: Any = None,                     # optional AtomConfig -> resolve keys from config.yaml
     client: Any | None = None,
     poll_timeout: float = 30.0,
     poll_interval: float = 2.0,
@@ -124,13 +141,13 @@ def export_run(
     """Download ``run_id``'s LangFuse traces to ``runs/<run_id>/export.json``.
 
     Polls until #lead-traces matches #executed tasks (local manifest) or ``poll_timeout`` elapses.
-    Writes nothing when no traces are found.
+    Writes nothing when no LEAD traces are found (matching the LangSmith exporter's parity).
     """
     store = RunStore(home)
     manifest = store.load(run_id)                        # FileNotFoundError if unknown locally
-    _require_keys()
+    _require_keys(cfg)
 
-    client = client or _default_client()
+    client = client or _default_client(cfg)
     now = now or (lambda: datetime.datetime.now().isoformat(timespec="seconds"))
     sleep = sleep or time.sleep
     monotonic = monotonic or time.monotonic
@@ -147,7 +164,10 @@ def export_run(
         sleep(poll_interval)
 
     fetched = _lead_count(traces)
-    if not traces:
+    # Guard on the LEAD count, not on `traces` being empty: a fetched session may contain only
+    # sub-agent traces (lead not yet uploaded), which must NOT be written as a bogus zero-lead
+    # export — matching export.py's `if fetched == 0`.
+    if fetched == 0:
         return ExportResult(run_id=run_id, path="", complete=False,
                             expected_roots=expected, fetched_roots=0)
 
@@ -173,6 +193,7 @@ def export_task(
     task_id: str,
     *,
     project: str | None = None,          # unused for LangFuse; kept for signature parity
+    cfg: Any = None,                     # optional AtomConfig -> resolve keys from config.yaml
     client: Any | None = None,
     poll_timeout: float = 30.0,
     poll_interval: float = 2.0,
@@ -194,15 +215,21 @@ def export_task(
         raise KeyError(f"task {task_id!r} not found in step {step_index} of run {run_id!r}")
     if task.status not in _TERMINAL:
         raise ValueError(f"task {task_id!r} has not completed (status: {task.status})")
-    _require_keys()
+    _require_keys(cfg)
 
-    client = client or _default_client()
+    client = client or _default_client(cfg)
     now = now or (lambda: datetime.datetime.now().isoformat(timespec="seconds"))
     sleep = sleep or time.sleep
     monotonic = monotonic or time.monotonic
 
     def _for_task(traces: list[dict]) -> list[dict]:
-        return [t for t in traces if _metadata(t).get("task_id") == task_id]
+        # Scope by BOTH task_id and step_index: task ids are unique only within a step, so a task
+        # id reused across steps would otherwise pull in the other step's lead + sub-agent traces.
+        return [
+            t for t in traces
+            if _metadata(t).get("task_id") == task_id
+            and _metadata(t).get("step_index") == step_index
+        ]
 
     deadline = monotonic() + poll_timeout
     selected: list[dict] = []
@@ -215,7 +242,9 @@ def export_task(
         sleep(poll_interval)
 
     fetched = _lead_count(selected)
-    if not selected:
+    # Guard on the LEAD count: a match set with only a sub-agent trace (lead not yet uploaded)
+    # must not be written as `complete` with zero lead roots.
+    if fetched == 0:
         return ExportResult(run_id=run_id, path="", complete=False,
                             expected_roots=1, fetched_roots=0, task_id=task_id)
 
