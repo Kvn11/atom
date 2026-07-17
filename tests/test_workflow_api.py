@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from contextlib import asynccontextmanager
 from urllib.parse import quote
 
@@ -13,6 +14,7 @@ import atom.observability.export as export_mod
 from atom.api.app import _content_disposition, _is_inline_unsafe, create_app
 from atom.observability.export import ExportResult
 from atom.workflow.engine import WorkflowEngine
+from atom.workflow.run_store import RunManifest, RunStore, StepState, TaskState
 from tests.conftest import make_prepared
 
 WS = "/mnt/user-data/workspace"
@@ -236,6 +238,89 @@ async def test_export_endpoint_unconfigured_is_503(base_config, atom_home):
     async with _client(app) as client:
         r = await client.post("/api/runs/r1/export", json={})
         assert r.status_code == 503
+
+
+def _seed_run(atom_home, run_id="r1"):
+    """Create a run manifest on disk (no queue entry) so the download route can load it."""
+    store = RunStore(str(atom_home))
+    store.create(RunManifest(
+        run_id=run_id, workflow="wf", created_at="2026-07-17T00:00:00",
+        workspace_path=str(store.workspace_dir(run_id)),
+        steps=[StepState(index=0, title="S", tasks=[
+            TaskState(id="t1", thread_id=f"{run_id}:s0:t1", status="succeeded")])],
+    ))
+    return store
+
+
+@pytest.mark.asyncio
+async def test_download_export_whole_run(base_config, atom_home):
+    store = _seed_run(atom_home)
+    payload = {"run_id": "r1", "roots": [{"id": "root1"}]}
+    store.export_path("r1").write_text(json.dumps(payload))
+    app = create_app(base_config, engine=WorkflowEngine(base_config, prepared_provider=_provider))
+    async with _client(app) as client:
+        r = await client.get("/api/runs/r1/export/download")
+        assert r.status_code == 200
+        assert r.headers["content-type"].startswith("application/json")
+        assert "attachment" in r.headers.get("content-disposition", "")
+        assert json.loads(r.content) == payload
+
+
+@pytest.mark.asyncio
+async def test_download_export_single_task(base_config, atom_home):
+    store = _seed_run(atom_home)
+    p = store.task_export_path("r1", 0, "t1")
+    p.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"scope": "task", "task_id": "t1"}
+    p.write_text(json.dumps(payload))
+    app = create_app(base_config, engine=WorkflowEngine(base_config, prepared_provider=_provider))
+    async with _client(app) as client:
+        r = await client.get("/api/runs/r1/export/download?step=0&task=t1")
+        assert r.status_code == 200
+        assert json.loads(r.content) == payload
+        assert "attachment" in r.headers.get("content-disposition", "")
+
+
+@pytest.mark.asyncio
+async def test_download_export_not_generated_is_404(base_config, atom_home):
+    _seed_run(atom_home)   # manifest exists, but no export file was written
+    app = create_app(base_config, engine=WorkflowEngine(base_config, prepared_provider=_provider))
+    async with _client(app) as client:
+        r = await client.get("/api/runs/r1/export/download")
+        assert r.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_download_export_unknown_run_is_404(base_config, atom_home):
+    app = create_app(base_config, engine=WorkflowEngine(base_config, prepared_provider=_provider))
+    async with _client(app) as client:
+        r = await client.get("/api/runs/ghost/export/download")
+        assert r.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_download_export_task_traversal_is_404(base_config, atom_home):
+    store = _seed_run(atom_home)
+    store.export_path("r1").write_text("{}")   # a run export exists; the crafted task must not escape to it or the FS
+    app = create_app(base_config, engine=WorkflowEngine(base_config, prepared_provider=_provider))
+    async with _client(app) as client:
+        r = await client.get("/api/runs/r1/export/download?step=0&task=" + quote("../../etc/passwd", safe=""))
+        assert r.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_download_export_large_file_streams_with_content_length(base_config, atom_home):
+    store = _seed_run(atom_home)
+    # ~3 MB export: dozens of FileResponse chunks, exercised as a real streamed download.
+    big = json.dumps({"roots": [{"id": i, "blob": "x" * 1000} for i in range(3000)]})
+    store.export_path("r1").write_text(big)
+    size = store.export_path("r1").stat().st_size
+    app = create_app(base_config, engine=WorkflowEngine(base_config, prepared_provider=_provider))
+    async with _client(app) as client:
+        r = await client.get("/api/runs/r1/export/download")
+        assert r.status_code == 200
+        assert int(r.headers["content-length"]) == size   # advertised from os.stat — no in-memory cap
+        assert len(r.content) == size                      # full byte stream delivered
 
 
 # --- provider dispatch (LangSmith vs LangFuse) ---

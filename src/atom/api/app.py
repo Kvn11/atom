@@ -273,6 +273,36 @@ def create_app(cfg: AtomConfig | None = None, engine: WorkflowEngine | None = No
             "fetched_roots": res.fetched_roots,
         }
 
+    @app.get("/api/runs/{run_id}/export/download")
+    def download_export(run_id: str, step: int | None = None, task: str | None = None):
+        """Stream a previously generated export file to the browser.
+
+        Whole-run export by default; one task's export when both ``step`` and ``task`` are given
+        (matching the POST). ``FileResponse`` streams from disk (chunked, ``Content-Length`` from
+        ``os.stat``), so an export of any size downloads without buffering in server memory. The
+        (step, task) pair is validated against the manifest before a path is built — this gives
+        clean 404s and blocks path traversal via a crafted ``task``.
+        """
+        try:
+            manifest = store.load(run_id)
+        except FileNotFoundError:
+            raise HTTPException(404, "run not found")
+        if step is not None and task is not None:
+            s = next((s for s in manifest.steps if s.index == step), None)
+            if s is None or not any(t.id == task for t in s.tasks):
+                raise HTTPException(404, "task not found")
+            path = store.task_export_path(run_id, step, task)
+            fname = f"atom-export-{run_id}-s{step}-{task}.json"
+        else:
+            path = store.export_path(run_id)
+            fname = f"atom-export-{run_id}.json"
+        if not path.is_file():
+            raise HTTPException(404, "export not generated yet — POST this run's /export first")
+        return FileResponse(
+            path, media_type="application/json",
+            headers={"Content-Disposition": _content_disposition(fname)},
+        )
+
     @app.get("/api/runs/{run_id}/artifacts")
     def get_artifacts(run_id: str) -> list:
         try:
