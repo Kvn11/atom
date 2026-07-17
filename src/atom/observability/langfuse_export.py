@@ -17,6 +17,7 @@ from typing import Any, Callable
 from atom.observability.export import (
     ExportResult,
     _TERMINAL,
+    _atomic_write_json,
     build_envelope,
     expected_root_count,
     resolve_run_ids,    # noqa: F401 — dispatched CLI/API import this from here too
@@ -63,7 +64,7 @@ def _langfuse_sdk_version() -> str | None:
 def _as_dict(obj: Any) -> dict:
     """Coerce a LangFuse SDK object (or fake) to a plain, JSON-safe dict.
 
-    The result flows straight into ``json.dumps(envelope, ...)`` in ``export_run``/``export_task``,
+    The result flows straight into ``json.dump(envelope, ...)`` in ``export_run``/``export_task``,
     so every value must be JSON-native. Two object shapes matter, and they need different handling:
 
     - **pydantic v2** (e.g. a fake, or any v2 model): ``model_dump(mode="json")`` converts
@@ -207,11 +208,8 @@ def export_run(
         complete=complete, expected=expected, fetched=fetched, now=now(),
         provider="langfuse", sdk_version=_langfuse_sdk_version(),
     )
-    path = store.run_dir(run_id) / "export.json"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name("export.json.tmp")
-    tmp.write_text(json.dumps(envelope, indent=2), encoding="utf-8")
-    os.replace(tmp, path)
+    path = store.export_path(run_id)
+    _atomic_write_json(path, envelope)
     return ExportResult(run_id=run_id, path=str(path), complete=complete,
                         expected_roots=expected, fetched_roots=fetched)
 
@@ -285,9 +283,6 @@ def export_task(
         provider="langfuse", sdk_version=_langfuse_sdk_version(),
     )
     path = store.task_export_path(run_id, step_index, task_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(envelope, indent=2), encoding="utf-8")
-    os.replace(tmp, path)
+    _atomic_write_json(path, envelope)
     return ExportResult(run_id=run_id, path=str(path), complete=True,
                         expected_roots=1, fetched_roots=fetched, task_id=task_id)

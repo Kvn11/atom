@@ -20,12 +20,29 @@ import json
 import os
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable
 
 from atom.workflow.run_store import RunManifest, RunStore
 
 _EXECUTED = ("running", "succeeded", "failed")
 _TERMINAL = ("succeeded", "failed")   # a task is exportable once it has terminated (either way)
+
+
+def _atomic_write_json(path: Path, obj: Any) -> None:
+    """Write ``obj`` to ``path`` as pretty JSON, atomically, streaming the encode.
+
+    ``json.dump(obj, fp, ...)`` serializes incrementally straight to the file handle, so it never
+    materializes the whole JSON as one in-memory string the way ``json.dumps(...)`` does — peak
+    memory stays at ~one copy (the source dict) instead of two, which is what lets a very large
+    export (well beyond 80 MB) be written without a second full-size buffer. The tmp-write +
+    ``os.replace`` keeps the swap atomic, matching ``RunStore.save``.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    with tmp.open("w", encoding="utf-8") as fp:
+        json.dump(obj, fp, indent=2)
+    os.replace(tmp, path)
 
 
 @dataclass
@@ -168,11 +185,8 @@ def export_run(
         complete=complete, expected=expected, fetched=fetched, now=now(),
         provider="langsmith", sdk_version=_langsmith_sdk_version(),
     )
-    path = store.run_dir(run_id) / "export.json"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name("export.json.tmp")
-    tmp.write_text(json.dumps(envelope, indent=2), encoding="utf-8")
-    os.replace(tmp, path)                  # atomic, matching RunStore.save
+    path = store.export_path(run_id)
+    _atomic_write_json(path, envelope)     # streamed write; atomic tmp + os.replace, matching RunStore.save
     return ExportResult(run_id=run_id, path=str(path), complete=complete,
                         expected_roots=expected, fetched_roots=fetched)
 
@@ -246,10 +260,7 @@ def export_task(
         provider="langsmith", sdk_version=_langsmith_sdk_version(),
     )
     path = store.task_export_path(run_id, step_index, task_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(envelope, indent=2), encoding="utf-8")
-    os.replace(tmp, path)                  # atomic, matching RunStore.save
+    _atomic_write_json(path, envelope)     # streamed write; atomic tmp + os.replace, matching RunStore.save
     return ExportResult(run_id=run_id, path=str(path), complete=True,
                         expected_roots=1, fetched_roots=fetched, task_id=task_id)
 

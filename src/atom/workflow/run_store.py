@@ -142,6 +142,10 @@ class RunStore:
         """Per-task trace export; mirrors the chats/ naming (s<step>__<task>.json)."""
         return self.exports_dir(run_id) / f"s{step_index}__{task_id}.json"
 
+    def export_path(self, run_id: str) -> Path:
+        """Whole-run trace export location (task exports use task_export_path)."""
+        return self.run_dir(run_id) / "export.json"
+
     def _manifest_path(self, run_id: str) -> Path:
         return self.run_dir(run_id) / "run.json"
 

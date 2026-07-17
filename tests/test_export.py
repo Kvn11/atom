@@ -303,3 +303,22 @@ def test_resolve_run_ids_selectors(atom_home):
         resolve_run_ids(str(atom_home), run_id="a", latest="alpha")         # two selectors
     with pytest.raises(ValueError, match="no runs found"):
         resolve_run_ids(str(atom_home), latest="ghost")
+
+
+def test_export_run_streams_write_without_json_dumps(atom_home, monkeypatch):
+    # The write path must stream via json.dump(fp), never buffer the whole export through
+    # json.dumps(...) — patch json.dumps to explode and assert the export still writes.
+    monkeypatch.setenv("LANGSMITH_API_KEY", "k")
+    _store_with_run(atom_home, "r1", ["succeeded"])
+    client = _FakeClient([["root1"]], {"root1": {"id": "root1"}})
+
+    import atom.observability.export as exp
+
+    def _boom(*a, **k):
+        raise AssertionError("json.dumps used — write is not streaming")
+    monkeypatch.setattr(exp.json, "dumps", _boom)
+
+    result = export_run(str(atom_home), "r1", project="proj", client=client,
+                        now=lambda: "t", sleep=_no_sleep)
+    env = json.loads(Path(result.path).read_text())   # wrote successfully, no json.dumps
+    assert env["run_id"] == "r1" and env["roots"][0]["id"] == "root1"
