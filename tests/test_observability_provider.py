@@ -230,6 +230,22 @@ def test_env_only_langsmith_maps_project(monkeypatch):
     assert os.environ.get("LANGSMITH_PROJECT") == "myproj"
 
 
+def test_default_langfuse_factory_builds_handler_with_update_trace():
+    """The REAL CallbackHandler must be built with update_trace=True.
+
+    The SDK default is update_trace=False, which writes the run-config metadata
+    (agent_role / is_subagent / task_id / step_index) ONLY onto the root observation, never onto
+    TRACE-level metadata. The pull-side exporter reads ``client.api.trace.get(id).metadata`` to
+    pick lead traces and scope a task, so with the default those keys are absent at export time:
+    export_task matches nothing and export_run miscounts leads against a real Langfuse backend.
+    Constructing the client/handler here is offline-safe (lazy, no network).
+    """
+    from atom.config.schema import LangfuseConfig
+    from atom.observability.provider import _default_langfuse_factory
+    _client, handler = _default_langfuse_factory(LangfuseConfig(), "pk", "sk")
+    assert handler.update_trace is True
+
+
 def test_resolve_langfuse_keys_prefers_config_over_env(monkeypatch):
     from atom.observability.provider import resolve_langfuse_keys
     monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "env_pk")

@@ -119,7 +119,14 @@ def _default_langfuse_factory(lf: Any, public: str, secret: str) -> tuple[Any, A
         release=lf.release or git_sha(),
         sample_rate=lf.sample_rate,
     )
-    return client, CallbackHandler()                  # binds to the global client by public_key
+    # update_trace=True is REQUIRED, not cosmetic. The SDK default (False) writes the run-config
+    # metadata (agent_role / is_subagent / task_id / step_index — see trace.build_lead_trace) ONLY
+    # onto the root OBSERVATION, never onto TRACE-level metadata. The pull-side exporter selects
+    # lead traces and scopes a task by reading `client.api.trace.get(id).metadata` (langfuse_export
+    # `_is_lead` / `_for_task`), so with the default those keys are absent at export time: export_task
+    # matches nothing and export_run counts every sub-agent as a lead. update_trace=True promotes the
+    # chain metadata to the trace, which is exactly what the exporter reads.
+    return client, CallbackHandler(update_trace=True)  # handler binds to the global client by public_key
 
 
 def resolve_langfuse_keys(obs: ObservabilityConfig) -> tuple[str | None, str | None, str | None]:

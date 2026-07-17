@@ -63,11 +63,18 @@ def _langfuse_sdk_version() -> str | None:
 def _as_dict(obj: Any) -> dict:
     """Coerce a LangFuse SDK object (or fake) to a plain, JSON-safe dict.
 
-    Prefers ``model_dump(mode="json")`` so datetime/UUID-typed fields (real LangFuse trace
-    objects carry them) come back as JSON-native values before they flow into
-    ``json.dumps(envelope, ...)`` in ``export_run``/``export_task`` — mirroring the LangSmith
-    exporter's ``model_dump(mode="json")`` (see export.py). Falls back to a no-arg call for
-    objects whose ``model_dump``/``dict`` don't accept the ``mode`` kwarg.
+    The result flows straight into ``json.dumps(envelope, ...)`` in ``export_run``/``export_task``,
+    so every value must be JSON-native. Two object shapes matter, and they need different handling:
+
+    - **pydantic v2** (e.g. a fake, or any v2 model): ``model_dump(mode="json")`` converts
+      datetime/UUID fields to strings. Tried first.
+    - **pydantic v1** (the REAL langfuse object): ``client.api.trace.get`` returns a Fern-generated
+      ``TraceWithFullDetails`` built on ``pydantic.v1.BaseModel``, which has NO ``model_dump`` and
+      whose ``.dict()`` keeps NATIVE ``datetime`` values (``timestamp``, observation start/end) —
+      those blow up ``json.dumps`` with ``TypeError: Object of type datetime is not JSON
+      serializable``. Its ``.json()`` DOES emit ISO strings, so round-tripping ``json.loads(.json())``
+      yields a JSON-safe dict. This is the path real exports take; a no-arg ``model_dump()``/``.dict()``
+      fallback would silently reintroduce the datetime and break the whole export.
     """
     if isinstance(obj, dict):
         return obj
@@ -76,7 +83,13 @@ def _as_dict(obj: Any) -> dict:
         try:
             return dump(mode="json")
         except TypeError:
-            return dump()
+            pass                        # v1-style dump without a `mode` kwarg -> try .json() below
+    to_json = getattr(obj, "json", None)
+    if callable(to_json):
+        try:
+            return json.loads(to_json())        # pydantic v1: ISO datetimes, JSON-safe
+        except (TypeError, ValueError):
+            pass
     d = getattr(obj, "dict", None)
     if callable(d):
         return d()
@@ -125,6 +138,21 @@ def _lead_count(traces: list[dict]) -> int:
     return sum(1 for t in traces if _is_lead(t))
 
 
+def _lead_identities(traces: list[dict]) -> set[tuple]:
+    """Distinct ``(step_index, task_id)`` over LEAD traces — the SET of tasks that produced a lead.
+
+    Completeness must be judged on distinct task identities, not the raw lead-trace count: crash
+    recovery re-runs a non-succeeded task (engine.execute), emitting a SECOND lead trace with the
+    same ``(step_index, task_id)``. A raw count would let that duplicate satisfy ``>= expected``
+    while a DIFFERENT task's lead is still absent (ingestion lag), writing a ``complete`` export
+    that silently omits a whole task. Counting identities requires every executed task to appear.
+    """
+    return {
+        (_metadata(t).get("step_index"), _metadata(t).get("task_id"))
+        for t in traces if _is_lead(t)
+    }
+
+
 def export_run(
     home: str | None,
     run_id: str,
@@ -157,14 +185,16 @@ def export_run(
     traces: list[dict] = []
     while True:
         traces = fetch_session_traces(client, run_id)
-        if expected == 0 or _lead_count(traces) >= expected:
+        if expected == 0 or len(_lead_identities(traces)) >= expected:
             break
         if monotonic() >= deadline:
             break
         sleep(poll_interval)
 
-    fetched = _lead_count(traces)
-    # Guard on the LEAD count, not on `traces` being empty: a fetched session may contain only
+    # Count DISTINCT (step, task) lead identities, not raw lead traces, so a duplicate lead from a
+    # crash-recovered re-run can't mask a genuinely missing task (see _lead_identities).
+    fetched = len(_lead_identities(traces))
+    # Guard on the lead count, not on `traces` being empty: a fetched session may contain only
     # sub-agent traces (lead not yet uploaded), which must NOT be written as a bogus zero-lead
     # export — matching export.py's `if fetched == 0`.
     if fetched == 0:

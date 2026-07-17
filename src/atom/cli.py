@@ -298,7 +298,12 @@ def _parse_task_selector(sel: str) -> tuple[int, str]:
 
 
 def _export_module(cfg):
-    """Select the exporter matching the configured provider (both expose export_run/export_task/resolve_run_ids)."""
+    """Select the exporter matching the configured provider (both expose export_run/export_task/resolve_run_ids).
+
+    Returns the RESOLVED provider string ("langfuse" / "langsmith" / "none") so callers can tailor
+    messaging. "none" (observability off) still routes to the LangSmith exporter — a run traced
+    before observability was disabled may still have exportable LangSmith traces.
+    """
     provider = cfg.observability.provider
     if provider is None:
         provider = "langsmith" if cfg.observability.enabled else "none"
@@ -306,7 +311,7 @@ def _export_module(cfg):
         from atom.observability import langfuse_export as mod
         return "langfuse", mod
     from atom.observability import export as mod
-    return "langsmith", mod
+    return provider, mod                                  # "langsmith" or collapsed "none"
 
 
 def _export_one_task(export_mod, cfg, proj: str, run_id, latest, all_workflow, task: str) -> None:
@@ -354,20 +359,22 @@ def workflow_export(
     latest: str = typer.Option(None, "--latest", help="Export the newest run of this workflow."),
     all_workflow: str = typer.Option(None, "--all", help="Export every run of this workflow."),
     task: str = typer.Option(None, "--task", help="Export one completed task: <step_index>:<task_id> (e.g. 0:writer)."),
-    project: str = typer.Option(None, "--project", help="LangSmith project (default: observability.project)."),
+    project: str = typer.Option(None, "--project", help="LangSmith project (LangSmith only; default: observability.project)."),
     config: str = typer.Option(None, "--config", "-c"),
 ) -> None:
-    """Download LangSmith traces for offline evaluation.
+    """Download this run's observability traces (LangSmith or LangFuse) for offline evaluation.
 
-    Whole run -> runs/<run_id>/export.json. With --task, one completed task ->
-    runs/<run_id>/exports/s<step>__<task>.json.
+    The backend is chosen by observability.provider. Whole run -> runs/<run_id>/export.json.
+    With --task, one completed task -> runs/<run_id>/exports/s<step>__<task>.json.
     """
     _load_env()
     cfg = load_config(config)
     provider, export_mod = _export_module(cfg)
 
     if provider == "langfuse":
-        proj = None                                       # LangFuse has no --project concept here
+        proj = None                                       # LangFuse selects by session, not a project
+        if project is not None:
+            console.print("[yellow]--project is ignored for LangFuse (it scopes by run session).[/yellow]")
         from atom.observability.provider import resolve_langfuse_keys
         public, secret, _ = resolve_langfuse_keys(cfg.observability)   # config.yaml keys OR env
         if not (public and secret):
@@ -377,7 +384,11 @@ def workflow_export(
     else:
         proj = project or cfg.observability.project
         if not proj:
-            console.print("[red]no LangSmith project — set observability.project or pass --project[/red]")
+            if provider == "none":
+                console.print("[red]observability is disabled (provider=none / not enabled) — no traces to "
+                              "export. Enable observability, or pass --project for a prior LangSmith run.[/red]")
+            else:
+                console.print("[red]no LangSmith project — set observability.project or pass --project[/red]")
             raise typer.Exit(1)
 
     if task is not None:

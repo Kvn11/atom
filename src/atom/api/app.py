@@ -222,10 +222,11 @@ def create_app(cfg: AtomConfig | None = None, engine: WorkflowEngine | None = No
 
     @app.post("/api/runs/{run_id}/export")
     def export_traces(run_id: str, body: ExportRequest | None = None) -> dict:
-        """Download this run's LangSmith trace(s) to disk. With step+task -> one task; else the run.
+        """Download this run's observability trace(s) to disk. With step+task -> one task; else the run.
 
-        Sync def on purpose: the exporter polls LangSmith with blocking sleeps, so FastAPI runs it
-        in a threadpool and never stalls the event loop / queue worker.
+        The backend (LangSmith or LangFuse) is chosen by observability.provider. Sync def on purpose:
+        the exporter polls the backend with blocking sleeps, so FastAPI runs it in a threadpool and
+        never stalls the event loop / queue worker.
         """
         provider = cfg.observability.provider
         if provider is None:
@@ -242,6 +243,9 @@ def create_app(cfg: AtomConfig | None = None, engine: WorkflowEngine | None = No
             from atom.observability import export as export_mod
             proj = cfg.observability.project
             if not proj:
+                if provider == "none":
+                    raise HTTPException(503, "export not configured: observability is disabled "
+                                             "(provider=none / not enabled)")
                 raise HTTPException(503, "export not configured: set observability.project")
         body = body or ExportRequest()
         try:

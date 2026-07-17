@@ -301,3 +301,142 @@ def test_export_run_accepts_config_keys(atom_home, monkeypatch):
     client = _FakeClient([[_summary("L0")], []], by_id)
     result = export_run(str(atom_home), "r1", cfg=cfg, client=client, now=lambda: "t", sleep=_no_sleep)
     assert result.complete is True and result.fetched_roots == 1
+
+
+# --- real-SDK-object serialization (mock-drift guard) -----------------------
+
+def _real_trace(id, task, step=0):
+    """A REAL langfuse ``TraceWithFullDetails`` (pydantic v1, native datetime) — NOT a fake.
+
+    ``client.api.trace.get`` returns this Fern model, which has NO ``model_dump`` and whose
+    ``.dict()`` keeps a native ``datetime``. Exercising it (instead of a fake with
+    ``model_dump(mode="json")``) is the only way to catch a regression in ``_as_dict``'s
+    pydantic-v1 (``.json()``) path — the path every real export takes.
+    """
+    from langfuse.api.resources.commons.types.trace_with_full_details import TraceWithFullDetails
+    return TraceWithFullDetails(
+        id=id, timestamp=datetime.datetime(2026, 7, 16, 12, 0, 0),
+        htmlPath=f"/traces/{id}", latency=1.0, totalCost=0.0, observations=[], scores=[],
+        tags=[], public=False, environment="default",
+        metadata={"run_id": "r1", "task_id": task, "step_index": step,
+                  "agent_role": "lead", "is_subagent": False},
+    )
+
+
+def test_export_run_serializes_real_sdk_trace_object(atom_home, monkeypatch):
+    """Regression against the REAL SDK object, not a fake. A pydantic-v1 ``TraceWithFullDetails``
+    has no ``model_dump`` and a native ``datetime`` timestamp; ``_as_dict`` must yield a JSON-safe
+    dict (via ``.json()``) or ``json.dumps(envelope)`` raises ``TypeError`` and NO export is written.
+    The other fakes define ``model_dump(mode="json")``, which the real object lacks — masking this.
+    """
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk")
+    _store_with_run(atom_home, "r1", ["succeeded"])
+    by_id = {"L0": _real_trace("L0", "t0")}
+    client = _FakeClient([[_summary("L0")], []], by_id)
+    result = export_run(str(atom_home), "r1", client=client, now=lambda: "t", sleep=_no_sleep)
+    assert result.complete is True and result.fetched_roots == 1
+    env = json.loads(Path(result.path).read_text())          # raises TypeError before the fix
+    assert env["roots"][0]["id"] == "L0"
+    assert isinstance(env["roots"][0]["timestamp"], str)     # ISO string, not a native datetime
+
+
+# --- completeness / pagination / parity hardening ---------------------------
+
+def test_export_run_duplicate_lead_does_not_mask_missing_task(atom_home, monkeypatch):
+    """Crash recovery re-runs a task, so Langfuse can hold TWO lead traces for the same (step,task).
+    Completeness counts DISTINCT (step,task) identities, so a duplicate for t0 must NOT satisfy the
+    2-task expectation while t1's lead is still missing — the export stays partial, not falsely
+    complete (which would silently drop t1's whole trace tree from an eval export).
+    """
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk")
+    _store_with_run(atom_home, "r1", ["succeeded", "succeeded"])     # expected = 2 tasks
+    by_id = {"L0": _lead("L0", "t0"), "L0b": _lead("L0b", "t0")}     # two leads, BOTH task t0
+    client = _FakeClient([[_summary("L0"), _summary("L0b")], []], by_id)
+    clock = iter([0.0, 100.0, 200.0])
+    result = export_run(str(atom_home), "r1", client=client, now=lambda: "t",
+                        sleep=_no_sleep, monotonic=lambda: next(clock))
+    assert result.expected_roots == 2
+    assert result.fetched_roots == 1        # ONE distinct task identity, not two raw leads
+    assert result.complete is False         # t1 genuinely missing -> partial
+
+
+def test_fetch_session_traces_paginates_across_pages(atom_home):
+    """Real langfuse ``trace.list`` is paginated; ``fetch_session_traces`` must accumulate across
+    every non-empty page until an empty page. Single-page fakes never exercised this loop before.
+    """
+    by_id = {"L0": _lead("L0", "t0"), "L1": _lead("L1", "t1"), "S0": _sub("S0", "t0")}
+    client = _FakeClient([[_summary("L0")], [_summary("L1"), _summary("S0")], []], by_id)
+    trees = fetch_session_traces(client, "r1")
+    assert {t["id"] for t in trees} == {"L0", "L1", "S0"}
+    assert client.api.list_calls == 3       # page 1, page 2, empty page 3 -> stop
+
+
+def test_export_task_unknown_step_and_task_raise_keyerror(atom_home, monkeypatch):
+    """Parity with the LangSmith exporter: an unknown step or task raises KeyError (the API maps
+    it to 404). The guard is a verbatim copy of export.py's, so lock it independently here.
+    """
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk")
+    _store_with_run(atom_home, "r1", ["succeeded"])          # only task "t0" in step 0
+    client = _FakeClient([[]], {})
+    with pytest.raises(KeyError):
+        export_task(str(atom_home), "r1", 0, "ghost", client=client)     # unknown task
+    with pytest.raises(KeyError):
+        export_task(str(atom_home), "r1", 9, "t0", client=client)        # unknown step
+
+
+class _LaggyAPI:
+    """Ingestion-lag fake: each successive WHOLE-session poll (a fresh page-1 scan) returns more
+    traces. ``page_sets[i]`` is the list of pages returned on the i-th session poll."""
+
+    def __init__(self, page_sets, by_id):
+        self._sets = list(page_sets)
+        self._by_id = by_id
+        self._poll = -1
+        self.list_calls = 0
+
+    class _NS:
+        def __init__(self, outer): self._o = outer
+
+        def list(self, session_id, page=1):
+            o = self._o
+            o.list_calls += 1
+            if page == 1:                       # a new session scan begins -> advance the poll
+                o._poll = min(o._poll + 1, len(o._sets) - 1)
+            pages = o._sets[o._poll]
+            idx = page - 1
+            return _Page(pages[idx] if idx < len(pages) else [])
+
+        def get(self, trace_id):
+            return self._o._by_id[trace_id]
+
+    @property
+    def trace(self):
+        return _LaggyAPI._NS(self)
+
+
+class _LaggyClient:
+    def __init__(self, page_sets, by_id):
+        self.api = _LaggyAPI(page_sets, by_id)
+
+
+def test_export_run_retries_until_complete_under_ingestion_lag(atom_home, monkeypatch):
+    """The poll loop must RE-FETCH under ingestion lag: an incomplete first poll followed by a
+    complete second poll yields complete=True. Mirrors the LangSmith ingestion-lag test; the
+    page-indexed fake could never return more on a later poll, so this path was unverified.
+    """
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk")
+    _store_with_run(atom_home, "r1", ["succeeded", "succeeded"])     # expected = 2
+    client = _LaggyClient(
+        page_sets=[
+            [[_summary("L0")], []],                       # poll 1: only t0's lead (t1 lagging)
+            [[_summary("L0"), _summary("L1")], []],       # poll 2+: both leads present
+        ],
+        by_id={"L0": _lead("L0", "t0"), "L1": _lead("L1", "t1")},
+    )
+    result = export_run(str(atom_home), "r1", client=client, now=lambda: "t", sleep=_no_sleep)
+    assert result.complete is True and result.fetched_roots == 2
+    assert client.api.list_calls >= 4       # poll 1 (page1+empty) + poll 2 (page1+empty) -> re-fetched
