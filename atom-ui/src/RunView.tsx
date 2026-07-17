@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
-import { api, artifactUrl, Artifact, ChatMsg, Manifest, StreamBlock } from "./api";
+import { api, artifactUrl, exportDownloadUrl, Artifact, ChatMsg, Manifest, StreamBlock } from "./api";
 import { Dot, StatusPill, elapsed, fmtSize } from "./ui";
 
 const IMG = /\.(png|jpe?g|gif|webp|svg|bmp|avif|apng|jfif|ico)$/i;
@@ -105,7 +105,7 @@ export function RunView({ runId, onBack }: { runId: string; onBack: () => void }
   const [tab, setTab] = useState<"transcript" | "deliverables">("transcript");
   const [openArt, setOpenArt] = useState<Artifact | null>(null);
   const [exporting, setExporting] = useState<"run" | "task" | null>(null);
-  const [exportMsg, setExportMsg] = useState<{ text: string; kind: "ok" | "warn" | "err" } | null>(null);
+  const [exportMsg, setExportMsg] = useState<{ text: string; kind: "ok" | "warn" | "err"; href?: string } | null>(null);
 
   useEffect(() => {
     let live = true;
@@ -152,7 +152,11 @@ export function RunView({ runId, onBack }: { runId: string; onBack: () => void }
       } else {
         const what = res.scope === "task" ? `task ${res.task_id}` : "run";
         const partial = res.complete ? "" : ` (partial: ${res.fetched_roots}/${res.expected_roots})`;
-        setExportMsg({ text: `Exported ${what} → ${res.path}${partial}`, kind: res.complete ? "ok" : "warn" });
+        setExportMsg({
+          text: `Exported ${what} → ${res.path}${partial}`,
+          kind: res.complete ? "ok" : "warn",
+          href: exportDownloadUrl(runId, body),
+        });
       }
     } catch (e) {
       setExportMsg({ text: e instanceof Error ? e.message : String(e), kind: "err" });
@@ -188,6 +192,9 @@ export function RunView({ runId, onBack }: { runId: string; onBack: () => void }
       {exportMsg && (
         <div className={`export-banner ${exportMsg.kind}`}>
           <span className="export-text">{exportMsg.text}</span>
+          {exportMsg.href && (
+            <a className="export-dl" href={exportMsg.href} download>Download export ↓</a>
+          )}
           <button className="export-x" onClick={() => setExportMsg(null)} title="Dismiss">✕</button>
         </div>
       )}

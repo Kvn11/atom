@@ -35,6 +35,11 @@ const j = async (r: Response) => { if (!r.ok) throw new Error(await r.text()); r
 export const artifactUrl = (id: string, rel: string) =>
   `/api/runs/${id}/artifacts/${rel.split("/").map(encodeURIComponent).join("/")}`;
 
+export const exportDownloadUrl = (id: string, body?: { step: number; task: string }) =>
+  body
+    ? `/api/runs/${id}/export/download?step=${body.step}&task=${encodeURIComponent(body.task)}`
+    : `/api/runs/${id}/export/download`;
+
 export const api = {
   workflows: (): Promise<Workflow[]> => fetch("/api/workflows").then(j),
   submit: (
