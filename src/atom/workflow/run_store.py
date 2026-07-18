@@ -166,6 +166,24 @@ class RunStore:
     def _manifest_path(self, run_id: str) -> Path:
         return self.run_dir(run_id) / "run.json"
 
+    def cancel_marker_path(self, run_id: str) -> Path:
+        return self.run_dir(run_id) / "cancel.request"
+
+    def write_cancel_marker(self, run_id: str, when: str) -> None:
+        p = self.cancel_marker_path(run_id)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps({"requested_at": when}), encoding="utf-8")
+
+    def cancel_requested(self, run_id: str) -> bool:
+        if not _is_safe_run_id(run_id):
+            return False
+        return self.cancel_marker_path(run_id).exists()
+
+    def clear_cancel_marker(self, run_id: str) -> None:
+        if not _is_safe_run_id(run_id):
+            return
+        self.cancel_marker_path(run_id).unlink(missing_ok=True)
+
     def create(self, manifest: RunManifest) -> RunManifest:
         self.workspace_dir(manifest.run_id).mkdir(parents=True, exist_ok=True)
         self.uploads_dir(manifest.run_id).mkdir(parents=True, exist_ok=True)
@@ -298,11 +316,11 @@ class RunStore:
     def list_summaries(self, status: str | None = None, limit: int = 50, offset: int = 0) -> dict:
         offset = max(0, offset)
         limit = max(0, limit)
-        empty = {"items": [], "total": 0, "counts": {"active": 0, "complete": 0, "halted": 0}}
+        empty = {"items": [], "total": 0, "counts": {"active": 0, "complete": 0, "halted": 0, "cancelled": 0}}
         if not self.runs_dir.is_dir():
             return empty
         summaries = self._scan_summaries()
-        counts = {"active": 0, "complete": 0, "halted": 0}
+        counts = {"active": 0, "complete": 0, "halted": 0, "cancelled": 0}
         for s in summaries:
             if s.status in _ACTIVE:
                 counts["active"] += 1

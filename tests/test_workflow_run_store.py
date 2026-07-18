@@ -165,7 +165,7 @@ def test_list_summaries_counts_filter_pagination(atom_home):
                       step_status="failed", task_status="failed")
 
     page = store.list_summaries()
-    assert page["counts"] == {"active": 1, "complete": 1, "halted": 1}
+    assert page["counts"] == {"active": 1, "complete": 1, "halted": 1, "cancelled": 0}
     assert page["total"] == 3
     assert [i["run_id"] for i in page["items"]] == ["r_halt", "r_done", "r_run"]
 
@@ -280,3 +280,31 @@ def test_artifact_path_blocks_run_id_traversal(atom_home):
     (art / "secret.txt").write_text("x")
     assert store.artifact_path("victim", "s0__t1/secret.txt") is not None
     assert store.artifact_path("../runs/victim", "s0__t1/secret.txt") is None  # traversal blocked
+
+
+def test_cancel_marker_roundtrip(atom_home):
+    store = RunStore(str(atom_home))
+    store.create(RunManifest(
+        run_id="r1", workflow="wf", created_at="2026-07-18T00:00:00",
+        workspace_path=str(store.workspace_dir("r1")), steps=[]))
+    assert store.cancel_requested("r1") is False
+    store.write_cancel_marker("r1", "2026-07-18T00:00:00.000000")
+    assert store.cancel_requested("r1") is True
+    store.clear_cancel_marker("r1")
+    assert store.cancel_requested("r1") is False
+
+
+def test_cancel_requested_false_for_unsafe_id(atom_home):
+    store = RunStore(str(atom_home))
+    assert store.cancel_requested("../evil") is False
+    store.clear_cancel_marker("../evil")   # no-op, must not raise
+
+
+def test_list_summaries_counts_cancelled(atom_home):
+    store = RunStore(str(atom_home))
+    store.create(RunManifest(
+        run_id="c1", workflow="wf", status="cancelled", created_at="2026-07-18T00:00:00",
+        workspace_path=str(store.workspace_dir("c1")), steps=[]))
+    page = store.list_summaries(status="all")
+    assert page["counts"]["cancelled"] == 1
+    assert page["counts"]["active"] == 0
