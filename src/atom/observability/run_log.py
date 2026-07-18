@@ -50,6 +50,139 @@ def _task_row(step_index: int, ts: Any) -> dict:
     }
 
 
+def _ls_tokens(run: dict) -> Optional[dict]:
+    p, c, t = run.get("prompt_tokens"), run.get("completion_tokens"), run.get("total_tokens")
+    if p is None and c is None and t is None:
+        um = (run.get("outputs") or {}).get("usage_metadata") or {}
+        p, c, t = um.get("input_tokens"), um.get("output_tokens"), um.get("total_tokens")
+    if p is None and c is None and t is None:
+        return None
+    p, c = p or 0, c or 0
+    return {"prompt": p, "completion": c, "total": t if t is not None else p + c}
+
+
+def _lf_tokens(usage: dict) -> Optional[dict]:
+    if not usage:
+        return None
+    p = usage.get("input") or usage.get("prompt_tokens") or usage.get("input_tokens") or 0
+    c = usage.get("output") or usage.get("completion_tokens") or usage.get("output_tokens") or 0
+    t = usage.get("total") or usage.get("total_tokens")
+    if not p and not c and not t:
+        return None
+    return {"prompt": p, "completion": c, "total": t if t is not None else p + c}
+
+
+def _blank_acc() -> dict:
+    return {"prompt": 0, "completion": 0, "total": 0, "llm_calls": 0, "tool_calls": 0,
+            "tool_failures": 0, "seen_tokens": False}
+
+
+def _walk_langsmith(run: dict, step, task, agent, calls: list, acc: dict) -> None:
+    rt = run.get("run_type")
+    dur = _duration_s(run.get("start_time"), run.get("end_time"))
+    if rt == "llm":
+        toks = _ls_tokens(run)
+        calls.append({"step": step, "task": task, "agent": agent, "type": "llm",
+                      "name": run.get("name"), "duration_s": dur,
+                      "ttft_s": _duration_s(run.get("start_time"), run.get("first_token_time")),
+                      "tokens": toks, "ok": run.get("error") is None, "error": run.get("error")})
+        acc["llm_calls"] += 1
+        if toks:
+            acc["seen_tokens"] = True
+            acc["prompt"] += toks["prompt"]; acc["completion"] += toks["completion"]; acc["total"] += toks["total"]
+    elif rt == "tool":
+        err = run.get("error")
+        calls.append({"step": step, "task": task, "agent": agent, "type": "tool",
+                      "name": run.get("name"), "duration_s": dur, "ttft_s": None,
+                      "tokens": None, "ok": err is None, "error": err})
+        acc["tool_calls"] += 1
+        if err:
+            acc["tool_failures"] += 1
+    for child in run.get("child_runs") or []:
+        cmeta = (child.get("extra") or {}).get("metadata") or {}
+        cagent = "subagent" if cmeta.get("is_subagent") else agent
+        _walk_langsmith(child, step, task, cagent, calls, acc)
+
+
+def _walk_langfuse(trace: dict, calls: list, accs: dict) -> None:
+    meta = trace.get("metadata") or {}
+    step, task = meta.get("step_index"), meta.get("task_id")
+    agent = "subagent" if meta.get("is_subagent") else "lead"
+    acc = accs.setdefault((step, task), _blank_acc())
+    for ob in trace.get("observations") or []:
+        dur = _duration_s(ob.get("start_time"), ob.get("end_time"))
+        if ob.get("type") == "GENERATION":
+            toks = _lf_tokens(ob.get("usage_details") or ob.get("usage") or {})
+            calls.append({"step": step, "task": task, "agent": agent, "type": "llm",
+                          "name": ob.get("name"), "duration_s": dur,
+                          "ttft_s": _duration_s(ob.get("start_time"), ob.get("completion_start_time")),
+                          "tokens": toks, "ok": ob.get("level") != "ERROR",
+                          "error": ob.get("status_message")})
+            acc["llm_calls"] += 1
+            if toks:
+                acc["seen_tokens"] = True
+                acc["prompt"] += toks["prompt"]; acc["completion"] += toks["completion"]; acc["total"] += toks["total"]
+        else:
+            is_err = ob.get("level") == "ERROR"
+            calls.append({"step": step, "task": task, "agent": agent, "type": "tool",
+                          "name": ob.get("name"), "duration_s": dur, "ttft_s": None,
+                          "tokens": None, "ok": not is_err, "error": ob.get("status_message")})
+            acc["tool_calls"] += 1
+            if is_err:
+                acc["tool_failures"] += 1
+
+
+def _enrich(run_log: dict, store: RunStore, run_id: str) -> None:
+    """Roll `export.json` into `run_log` in place; any read/shape surprise degrades, never raises.
+
+    A missing export leaves Task 1's shape untouched (`calls == []`, `export_present=False`).
+    Once the export is confirmed present+parsed, a downstream shape surprise (e.g. `roots` holding
+    something other than the expected dicts) still must not turn into a 500 for the caller — it
+    degrades to "no enrichment" with a note instead, per the "never crash on trace data" rule.
+    """
+    path = store.export_path(run_id)
+    if not path.is_file():
+        return
+    try:
+        env = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(env, dict):
+            raise ValueError("export.json root is not an object")
+    except (ValueError, OSError):
+        run_log["meta"]["notes"].append("export.json present but unreadable")
+        return
+    provider = env.get("provider")
+    run_log["meta"]["provider"] = provider
+    run_log["meta"]["export_present"] = True
+    run_log["meta"]["export_complete"] = bool(env.get("complete"))
+    calls: list = []
+    accs: dict = {}
+    try:
+        for root in env.get("roots") or []:
+            if not isinstance(root, dict):
+                continue
+            if provider == "langfuse":
+                _walk_langfuse(root, calls, accs)
+            else:
+                meta = (root.get("extra") or {}).get("metadata") or {}
+                step, task = meta.get("step_index"), meta.get("task_id")
+                agent = "subagent" if meta.get("is_subagent") else "lead"
+                acc = accs.setdefault((step, task), _blank_acc())
+                _walk_langsmith(root, step, task, agent, calls, acc)
+    except (AttributeError, TypeError, KeyError):
+        run_log["meta"]["notes"].append("export.json roots had an unexpected shape; enrichment skipped")
+        calls, accs = [], {}
+    run_log["calls"] = calls
+    for step in run_log["steps"]:
+        for row in step["tasks"]:
+            acc = accs.get((step["index"], row["id"]))
+            if not acc:
+                continue
+            row["llm_calls"] = acc["llm_calls"]; row["tool_calls"] = acc["tool_calls"]
+            row["tool_failures"] = acc["tool_failures"]
+            if acc["seen_tokens"]:
+                row["tokens"] = {"prompt": acc["prompt"], "completion": acc["completion"], "total": acc["total"]}
+
+
 def build_run_log(home: str | None, run_id: str) -> dict:
     store = RunStore(home)
     m: RunManifest = store.load(run_id)
@@ -72,7 +205,7 @@ def build_run_log(home: str | None, run_id: str) -> dict:
                     "text": text, "tool_calls": msg.get("tool_calls"), "name": msg.get("name"),
                 })
 
-    return {
+    log = {
         "run": {
             "run_id": m.run_id, "workflow": m.workflow, "status": m.status,
             "created_at": m.created_at, "ended_at": m.ended_at,
@@ -86,6 +219,8 @@ def build_run_log(home: str | None, run_id: str) -> dict:
             "truncations": truncations, "notes": [],
         },
     }
+    _enrich(log, store, run_id)
+    return log
 
 
 def run_log_bytes(run_log: dict) -> bytes:

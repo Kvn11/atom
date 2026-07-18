@@ -101,3 +101,100 @@ def test_run_log_bytes_roundtrips(atom_home):
     data = run_log_bytes(build_run_log(str(atom_home), "r1"))
     assert isinstance(data, bytes)
     assert json.loads(data)["run"]["run_id"] == "r1"
+
+
+import json as _json
+
+
+def _write_export(store, run_id, provider, roots, complete=True):
+    env = {"run_id": run_id, "provider": provider, "complete": complete, "roots": roots}
+    store.export_path(run_id).write_text(_json.dumps(env), encoding="utf-8")
+
+
+def test_langsmith_traces_roll_up_tokens_and_tool_failures(atom_home):
+    store = _seed_run(atom_home)
+    roots = [
+        {  # lead root for step 0 / poet_a
+            "extra": {"metadata": {"step_index": 0, "task_id": "poet_a"}},
+            "run_type": "chain", "start_time": "2026-07-18T00:00:00", "end_time": "2026-07-18T00:00:20",
+            "child_runs": [
+                {"run_type": "llm", "name": "haiku", "start_time": "2026-07-18T00:00:01",
+                 "end_time": "2026-07-18T00:00:05", "first_token_time": "2026-07-18T00:00:02",
+                 "prompt_tokens": 1200, "completion_tokens": 300, "total_tokens": 1500, "error": None},
+                {"run_type": "tool", "name": "write_file", "start_time": "2026-07-18T00:00:05",
+                 "end_time": "2026-07-18T00:00:06", "error": None},
+            ],
+        },
+        {  # lead root for step 1 / refiner — a failed tool call
+            "extra": {"metadata": {"step_index": 1, "task_id": "refiner"}},
+            "run_type": "chain", "start_time": "2026-07-18T00:00:20", "end_time": "2026-07-18T00:01:30",
+            "child_runs": [
+                {"run_type": "llm", "name": "haiku", "start_time": "2026-07-18T00:00:21",
+                 "end_time": "2026-07-18T00:00:25", "prompt_tokens": 50000, "completion_tokens": 100,
+                 "total_tokens": 50100, "error": None},
+                {"run_type": "tool", "name": "read_file", "start_time": "2026-07-18T00:00:25",
+                 "end_time": "2026-07-18T00:00:26", "error": "FileNotFoundError: poem_a.md"},
+            ],
+        },
+    ]
+    _write_export(store, "r1", "langsmith", roots)
+    log = build_run_log(str(atom_home), "r1")
+
+    assert log["meta"]["provider"] == "langsmith"
+    assert log["meta"]["export_present"] is True and log["meta"]["export_complete"] is True
+
+    poet = log["steps"][0]["tasks"][0]
+    assert poet["tokens"] == {"prompt": 1200, "completion": 300, "total": 1500}
+    assert poet["llm_calls"] == 1 and poet["tool_calls"] == 1 and poet["tool_failures"] == 0
+
+    refiner = log["steps"][1]["tasks"][0]
+    assert refiner["tokens"]["prompt"] == 50000          # context hotspot lives here
+    assert refiner["tool_failures"] == 1
+
+    failed = next(c for c in log["calls"] if c["type"] == "tool" and not c["ok"])
+    assert failed["task"] == "refiner" and "FileNotFoundError" in failed["error"]
+    llm_call = next(c for c in log["calls"] if c["type"] == "llm" and c["task"] == "poet_a")
+    assert llm_call["ttft_s"] == 1.0 and llm_call["duration_s"] == 4.0
+
+
+def test_subagent_calls_attributed_to_the_task(atom_home):
+    store = _seed_run(atom_home)
+    roots = [{
+        "extra": {"metadata": {"step_index": 0, "task_id": "poet_a"}},
+        "run_type": "chain", "child_runs": [
+            {"run_type": "chain", "extra": {"metadata": {"is_subagent": True, "agent_role": "general"}},
+             "child_runs": [
+                 {"run_type": "llm", "name": "haiku", "prompt_tokens": 10, "completion_tokens": 5,
+                  "total_tokens": 15, "error": None}]},
+        ],
+    }]
+    _write_export(store, "r1", "langsmith", roots)
+    log = build_run_log(str(atom_home), "r1")
+    sub = next(c for c in log["calls"] if c["agent"] == "subagent")
+    assert sub["task"] == "poet_a" and sub["tokens"]["total"] == 15
+
+
+def test_incomplete_export_flagged(atom_home):
+    store = _seed_run(atom_home)
+    _write_export(store, "r1", "langsmith", [], complete=False)
+    log = build_run_log(str(atom_home), "r1")
+    assert log["meta"]["export_present"] is True and log["meta"]["export_complete"] is False
+
+
+def test_langfuse_generation_tokens_and_error(atom_home):
+    store = _seed_run(atom_home)
+    roots = [{
+        "metadata": {"step_index": 0, "task_id": "poet_a"},
+        "observations": [
+            {"type": "GENERATION", "name": "haiku", "start_time": "2026-07-18T00:00:01",
+             "end_time": "2026-07-18T00:00:03", "usage_details": {"input": 900, "output": 120, "total": 1020}},
+            {"type": "SPAN", "name": "write_file", "level": "ERROR", "status_message": "boom",
+             "start_time": "2026-07-18T00:00:03", "end_time": "2026-07-18T00:00:04"},
+        ],
+    }]
+    _write_export(store, "r1", "langfuse", roots)
+    log = build_run_log(str(atom_home), "r1")
+    poet = log["steps"][0]["tasks"][0]
+    assert poet["tokens"] == {"prompt": 900, "completion": 120, "total": 1020}
+    assert poet["tool_failures"] == 1
+    assert any(c["type"] == "tool" and not c["ok"] and c["error"] == "boom" for c in log["calls"])
