@@ -18,6 +18,7 @@ from __future__ import annotations
 import datetime
 import json
 import os
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -35,14 +36,24 @@ def _atomic_write_json(path: Path, obj: Any) -> None:
     ``json.dump(obj, fp, ...)`` serializes incrementally straight to the file handle, so it never
     materializes the whole JSON as one in-memory string the way ``json.dumps(...)`` does — peak
     memory stays at ~one copy (the source dict) instead of two, which is what lets a very large
-    export (well beyond 80 MB) be written without a second full-size buffer. The tmp-write +
-    ``os.replace`` keeps the swap atomic, matching ``RunStore.save``.
+    export (well beyond 80 MB) be written without a second full-size buffer.
+
+    The temp file gets a UNIQUE name per call (``mkstemp``), not a shared ``<name>.tmp``: two
+    concurrent exports of the same run would otherwise truncate each other's partial write and
+    race on ``os.replace`` (the loser hits ``FileNotFoundError``). Each writer renames its own
+    temp into place — the swap is atomic (same directory, matching ``RunStore.save``) and the last
+    writer wins with a complete object. A failed encode removes its temp instead of leaking it.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    with tmp.open("w", encoding="utf-8") as fp:
-        json.dump(obj, fp, indent=2)
-    os.replace(tmp, path)
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fp:
+            json.dump(obj, fp, indent=2)
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 @dataclass

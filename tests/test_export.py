@@ -322,3 +322,44 @@ def test_export_run_streams_write_without_json_dumps(atom_home, monkeypatch):
                         now=lambda: "t", sleep=_no_sleep)
     env = json.loads(Path(result.path).read_text())   # wrote successfully, no json.dumps
     assert env["run_id"] == "r1" and env["roots"][0]["id"] == "root1"
+
+
+def test_atomic_write_json_unique_tmp_per_concurrent_write(atom_home, monkeypatch):
+    # Two exports of the SAME run must not share one "<name>.tmp" file — a shared temp lets a
+    # second writer truncate the first's partial write, and the first's os.replace can then hit
+    # FileNotFoundError. Each call must write its own temp and atomically rename into place.
+    import atom.observability.export as exp
+
+    seen_tmps: list[str] = []
+    real_replace = exp.os.replace
+
+    def spy_replace(src, dst):
+        seen_tmps.append(str(src))
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(exp.os, "replace", spy_replace)
+    target = Path(atom_home) / "export.json"
+    exp._atomic_write_json(target, {"n": 1})
+    exp._atomic_write_json(target, {"n": 2})
+
+    assert len(seen_tmps) == 2
+    assert seen_tmps[0] != seen_tmps[1]                       # distinct temps, not a shared "<name>.tmp"
+    assert all(not t.endswith("export.json") for t in seen_tmps)   # never the final path
+    assert json.loads(target.read_text()) == {"n": 2}        # last writer wins, complete + valid
+    assert list(Path(atom_home).glob("*.tmp")) == []         # no temp left behind
+
+
+def test_atomic_write_json_removes_temp_on_write_failure(atom_home, monkeypatch):
+    # A failed encode must not publish a partial file NOR leak the temp file.
+    import atom.observability.export as exp
+
+    def _boom(*a, **k):
+        raise RuntimeError("encode failed")
+
+    monkeypatch.setattr(exp.json, "dump", _boom)
+    target = Path(atom_home) / "export.json"
+    with pytest.raises(RuntimeError):
+        exp._atomic_write_json(target, {"n": 1})
+
+    assert not target.exists()                               # nothing published
+    assert list(Path(atom_home).glob("*.tmp")) == []         # temp cleaned up, not leaked
