@@ -109,6 +109,8 @@ export function RunView({ runId, onBack, onOpenRun }:
   const [exportMsg, setExportMsg] = useState<{ text: string; kind: "ok" | "warn" | "err"; href?: string } | null>(null);
   const [improving, setImproving] = useState(false);
   const [improveMsg, setImproveMsg] = useState<{ text: string; kind: "ok" | "err"; runId?: string } | null>(null);
+  const [cancelling, setCancelling] = useState(false);
+  const [cancelMsg, setCancelMsg] = useState<{ text: string; kind: "ok" | "err" } | null>(null);
 
   useEffect(() => {
     let live = true;
@@ -118,7 +120,7 @@ export function RunView({ runId, onBack, onOpenRun }:
       if (live && m) {
         setManifest(m);
         api.artifacts(runId).then((a) => { if (live) setArts(a); }).catch(() => { /* ignore */ });
-        if (m.status === "complete" || m.status === "halted") return;
+        if (m.status === "complete" || m.status === "halted" || m.status === "cancelled") return;
       }
       if (live) timer = setTimeout(tick, 1500);
     };
@@ -181,6 +183,19 @@ export function RunView({ runId, onBack, onOpenRun }:
     }
   };
 
+  const cancelRun = async () => {
+    if (!window.confirm("Cancel this run? The current step finishes, then it stops.")) return;
+    setCancelling(true);
+    setCancelMsg(null);
+    try {
+      await api.cancel(runId);
+    } catch (e) {
+      setCancelMsg({ text: e instanceof Error ? e.message : String(e), kind: "err" });
+    } finally {
+      setCancelling(false);
+    }
+  };
+
   return (
     <div className="runview">
       <div className="run-head">
@@ -191,9 +206,19 @@ export function RunView({ runId, onBack, onOpenRun }:
         </div>
         {manifest && (
           <div className="run-status">
-            <StatusPill status={manifest.status} />
+            {manifest.cancel_requested && manifest.status === "running"
+              ? <span className="pill warn">cancelling…</span>
+              : <StatusPill status={manifest.status} />}
             <span className="dim">Step {curStep} of {manifest.steps.length}</span>
             <span className="dim">{elapsed(manifest.created_at, manifest.ended_at)}</span>
+            {(manifest.status === "pending" || manifest.status === "queued"
+              || (manifest.status === "running" && !manifest.cancel_requested)) && (
+              <button className="btn-sm" disabled={cancelling}
+                onClick={() => cancelRun()}
+                title="Stop this run at the next step boundary">
+                {cancelling ? "Cancelling…" : "Cancel run"}
+              </button>
+            )}
             <button className="btn-sm" disabled={manifest.status !== "complete" || exporting !== null}
               onClick={() => runExport()}
               title={manifest.status === "complete"
@@ -234,6 +259,13 @@ export function RunView({ runId, onBack, onOpenRun }:
             </button>
           )}
           <button className="export-x" onClick={() => setImproveMsg(null)} title="Dismiss">✕</button>
+        </div>
+      )}
+
+      {cancelMsg && (
+        <div className={`export-banner ${cancelMsg.kind}`}>
+          <span className="export-text">{cancelMsg.text}</span>
+          <button className="export-x" onClick={() => setCancelMsg(null)} title="Dismiss">✕</button>
         </div>
       )}
 
