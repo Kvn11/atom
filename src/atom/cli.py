@@ -169,6 +169,34 @@ def threads(config: str = typer.Option(None, "--config", "-c")) -> None:
 workflow_app = typer.Typer(help="Run multi-agent workflows (Steps x Tasks).")
 app.add_typer(workflow_app, name="workflow")
 
+notes_app = typer.Typer(help="Manage a workflow's persistent Logseq vault.")
+workflow_app.add_typer(notes_app, name="notes")
+
+
+@notes_app.command("clear")
+def workflow_notes_clear(
+    name: str = typer.Argument(..., help="Workflow name whose vault to clear."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt."),
+    config: str = typer.Option(None, "--config", "-c"),
+) -> None:
+    """Delete a workflow's persistent Logseq vault (a fresh one is provisioned on the next run)."""
+    from atom.notes import clear_vault
+    from atom.workflow.run_store import RunStore
+
+    cfg = load_config(config)
+    if RunStore(cfg.home).has_active_runs(name):
+        console.print(
+            f"[red]Refusing to clear notes for '{name}': a run is active. "
+            f"Wait for it to finish or cancel it first.[/red]"
+        )
+        raise typer.Exit(1)
+    if not yes:
+        typer.confirm(f"Delete the persistent Logseq vault for workflow '{name}'?", abort=True)
+    if clear_vault(cfg.home, name):
+        console.print(f"[green]Cleared notes vault for '{name}'.[/green]")
+    else:
+        console.print(f"[dim]No notes vault existed for '{name}'.[/dim]")
+
 
 @workflow_app.command("list")
 def workflow_list(config: str = typer.Option(None, "--config", "-c")) -> None:
