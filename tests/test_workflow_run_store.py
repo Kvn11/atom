@@ -325,3 +325,14 @@ def test_has_active_runs_false_for_terminal(atom_home):
     m.workflow = "wf-y"; m.status = "complete"
     store.create(m)
     assert store.has_active_runs("wf-y") is False
+
+
+def test_has_active_runs_matches_on_slug_not_raw_name(atom_home):
+    store = RunStore(str(atom_home))
+    m = _manifest("hs1", store.workspace_dir("hs1"))
+    m.workflow = "Weekly Report"; m.status = "running"
+    store.create(m)
+    # A differently-cased/spaced name that slugifies identically must still trip the gate.
+    assert store.has_active_runs("weekly report") is True
+    assert store.has_active_runs("weekly-report") is True
+    assert store.has_active_runs("something-else") is False

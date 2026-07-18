@@ -355,8 +355,14 @@ class RunStore:
         return [s.run_id for s in self._scan_summaries() if s.status in ("pending", "running")]
 
     def has_active_runs(self, workflow_name: str) -> bool:
-        """True if any run of ``workflow_name`` is pending/queued/running (non-terminal)."""
+        """True if any run whose vault-slug matches workflow_name is pending/queued/running.
+
+        Keyed on the notes slug (not the raw name) so the gate protects exactly the vault
+        clear_vault would delete — see atom.notes._slug / clear_vault.
+        """
+        from atom.notes import _slug
+        target = _slug(workflow_name)
         return any(
-            s.workflow == workflow_name and s.status in _ACTIVE
+            _slug(s.workflow) == target and s.status in _ACTIVE
             for s in self._scan_summaries()
         )

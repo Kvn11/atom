@@ -615,6 +615,7 @@ async def test_delete_workflow_notes_unknown_is_404(base_config, atom_home):
 @pytest.mark.asyncio
 async def test_delete_workflow_notes_409_when_active_run(base_config, atom_home):
     _seed_notes_wf(atom_home)
+    from atom.notes import notes_root
     from atom.workflow.run_store import RunManifest, RunStore, StepState, TaskState
     store = RunStore(str(atom_home))
     m = RunManifest(
@@ -624,7 +625,9 @@ async def test_delete_workflow_notes_409_when_active_run(base_config, atom_home)
     )
     m.status = "running"
     store.create(m)
+    (notes_root(str(atom_home), "notewf") / "pages").mkdir(parents=True)
     app = create_app(base_config, engine=WorkflowEngine(base_config, prepared_provider=_provider))
     async with _client_no_worker(app) as c:
         r = await c.delete("/api/workflows/notewf/notes")
     assert r.status_code == 409
+    assert notes_root(str(atom_home), "notewf").exists()  # gate ran before any delete
