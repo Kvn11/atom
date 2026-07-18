@@ -132,15 +132,21 @@ def test_recover_finalizes_marked_run_instead_of_requeue(base_config, atom_home)
 
 
 @pytest.mark.asyncio
-async def test_drain_one_finalizes_marked_run_without_executing(base_config, atom_home):
+async def test_drain_one_finalizes_marked_run_without_executing(base_config, atom_home, monkeypatch):
     engine = WorkflowEngine(base_config)
     engine.create_run(_two_step_wf(), {}, "rdo", "2026-07-18T00:00:00")
     engine.enqueue("rdo")
     engine.store.write_cancel_marker("rdo", "2026-07-18T00:00:00.000000")
 
+    called = []
+    async def _never(run_id):            # if the guard is removed, _drain_one would call this
+        called.append(run_id)
+    monkeypatch.setattr(engine, "execute", _never)
+
     sem = asyncio.Semaphore(1)
-    await sem.acquire()                        # _drain_one releases it in its finally block
+    await sem.acquire()                  # _drain_one releases it in its finally
     await engine._drain_one("rdo", sem)
 
+    assert called == []                  # the guard returned before execute() was entered
     assert engine.store.load("rdo").status == "cancelled"
-    assert engine.store.load_chat("rdo", 0, "t1") is None   # never executed
+    assert engine.store.load_chat("rdo", 0, "t1") is None
