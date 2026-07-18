@@ -113,3 +113,34 @@ async def test_running_run_cancels_gracefully_after_current_task(base_config, at
     assert engine.store.cancel_requested("rcg") is False          # marker cleared
     # the partial transcript of the interrupted task was still persisted
     assert engine.store.load_chat("rcg", 0, "t1") is not None
+
+
+def test_recover_finalizes_marked_run_instead_of_requeue(base_config, atom_home):
+    engine = WorkflowEngine(base_config)
+    m = engine.create_run(_two_step_wf(), {}, "rrec", "2026-07-18T00:00:00")
+    m.status = "running"                      # simulate a crash mid-run
+    m.steps[0].status = "running"
+    m.steps[0].tasks[0].status = "running"
+    engine.store.save(m)
+    engine.store.write_cancel_marker("rrec", "2026-07-18T00:00:00.000000")
+
+    engine.recover()
+
+    assert engine.store.load("rrec").status == "cancelled"
+    assert engine.store.cancel_requested("rrec") is False
+    assert "rrec" not in engine.store.queued_run_ids()
+
+
+@pytest.mark.asyncio
+async def test_drain_one_finalizes_marked_run_without_executing(base_config, atom_home):
+    engine = WorkflowEngine(base_config)
+    engine.create_run(_two_step_wf(), {}, "rdo", "2026-07-18T00:00:00")
+    engine.enqueue("rdo")
+    engine.store.write_cancel_marker("rdo", "2026-07-18T00:00:00.000000")
+
+    sem = asyncio.Semaphore(1)
+    await sem.acquire()                        # _drain_one releases it in its finally block
+    await engine._drain_one("rdo", sem)
+
+    assert engine.store.load("rdo").status == "cancelled"
+    assert engine.store.load_chat("rdo", 0, "t1") is None   # never executed

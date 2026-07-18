@@ -137,7 +137,11 @@ class WorkflowEngine:
             except Exception:  # noqa: BLE001 — a corrupt manifest must not block recovery
                 logger.exception("recover: failed to load run %s; skipping", run_id)
                 continue
-            if m.status in ("complete", "halted"):
+            if m.status in ("complete", "halted", "cancelled"):
+                continue
+            if self.store.cancel_requested(run_id):
+                self._finalize_cancelled(m)                 # a cancel outlived a crash — don't resume
+                logger.info("recover: finalized cancelled run %s", run_id)
                 continue
             # NOTE: a "queued" run is intentionally NOT skipped here. RunStore.save() writes
             # run.json then summary.json as two separate atomic replaces; a crash between them
@@ -230,6 +234,9 @@ class WorkflowEngine:
             # instead of re-running execute() -- which would crash (its cached WorkflowDef was
             # already popped after the first pass) and clobber a "complete" status with "halted".
             if self.store.load(run_id).status in ("complete", "halted", "cancelled"):
+                return
+            if self.store.cancel_requested(run_id):
+                self._finalize_cancelled(self.store.load(run_id))
                 return
             await self.execute(run_id)
             self._drain_failures.pop(run_id, None)   # progress made -> reset the failure count
