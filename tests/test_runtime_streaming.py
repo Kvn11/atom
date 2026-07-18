@@ -90,3 +90,34 @@ async def test_streaming_disabled_config_skips_stream(base_config):
     result = await run_agent("hi", config=base_config, prepared=prepared, on_event=on_event)
     assert result.final_text == "plain"
     assert events == []  # streaming disabled -> ainvoke path, no events
+
+
+@pytest.mark.asyncio
+async def test_should_cancel_stops_stream_and_flags_result(base_config):
+    async def on_event(e):
+        pass
+    prepared = make_streaming_prepared("alpha beta gamma")
+    result = await run_agent("hi", config=base_config, prepared=prepared,
+                             on_event=on_event, should_cancel=lambda: True)
+    assert result.cancelled is True
+
+
+@pytest.mark.asyncio
+async def test_should_cancel_false_completes_normally(base_config):
+    async def on_event(e):
+        pass
+    prepared = make_streaming_prepared("alpha beta gamma")
+    result = await run_agent("hi", config=base_config, prepared=prepared,
+                             on_event=on_event, should_cancel=lambda: False)
+    assert result.cancelled is False
+    assert result.final_text.strip() == "alpha beta gamma"
+
+
+@pytest.mark.asyncio
+async def test_should_cancel_ignored_when_streaming_disabled(base_config):
+    base_config.streaming.enabled = False
+    prepared = make_prepared([AIMessage(content="plain")])
+    result = await run_agent("hi", config=base_config, prepared=prepared,
+                             on_event=lambda e: None, should_cancel=lambda: True)
+    assert result.cancelled is False   # ainvoke path has no cooperative check
+    assert result.final_text == "plain"

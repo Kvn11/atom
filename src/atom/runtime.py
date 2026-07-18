@@ -35,6 +35,7 @@ class RunResult:
     final_text: str
     state: dict[str, Any] = field(default_factory=dict)
     awaiting_clarification: bool = False
+    cancelled: bool = False
 
     @property
     def title(self) -> str | None:
@@ -99,6 +100,7 @@ async def run_agent(
     on_event: "Callable[[dict], Awaitable[None]] | None" = None,
     obs_provider=None,
     on_transcript: "Callable[[list], None] | None" = None,
+    should_cancel: "Callable[[], bool] | None" = None,
 ) -> RunResult:
     """Run the lead agent on ``task`` and return the final result.
 
@@ -131,6 +133,7 @@ async def run_agent(
     content = render_prompt(prof.user_prompt, {"task": task}, cfg.config_dir) if prof.user_prompt else task
     db_path = Path(home) / "atom.sqlite"
 
+    cancelled = False
     async with open_checkpointer(cfg.checkpointer.backend, db_path) as cp:
         agent = build_lead_agent(
             cfg, profile_name, prepared=prepared, checkpointer=cp,
@@ -167,6 +170,9 @@ async def run_agent(
                             msgs = update.get("messages") if isinstance(update, dict) else None
                             for ev in translate_update(msgs or []):
                                 await on_event(ev)
+                        if should_cancel is not None and should_cancel():
+                            cancelled = True
+                            break
                 # aget_state gives the authoritative final channel values (messages + artifacts + title),
                 # equivalent to what ainvoke returned — the checkpointer is still open in this context.
                 result = (await agent.aget_state(run_config)).values
@@ -204,7 +210,7 @@ async def run_agent(
         final_text = "\n".join([question, *extras])
         return RunResult(
             thread_id=thread_id, messages=messages, final_text=final_text,
-            state=result, awaiting_clarification=True,
+            state=result, awaiting_clarification=True, cancelled=cancelled,
         )
 
     final_text = ""
@@ -214,4 +220,5 @@ async def run_agent(
             if text.strip():
                 final_text = text
                 break
-    return RunResult(thread_id=thread_id, messages=messages, final_text=final_text, state=result)
+    return RunResult(thread_id=thread_id, messages=messages, final_text=final_text,
+                     state=result, cancelled=cancelled)
