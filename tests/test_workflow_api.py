@@ -122,7 +122,7 @@ async def test_runs_list_returns_paginated_summaries(base_config, atom_home):
         page = (await client.get("/api/runs?status=all&limit=50&offset=0")).json()
         assert page["total"] >= 1
         assert any(i["run_id"] == run_id for i in page["items"])
-        assert set(page["counts"]) == {"active", "complete", "halted"}
+        assert set(page["counts"]) == {"active", "complete", "halted", "cancelled"}
         item = next(i for i in page["items"] if i["run_id"] == run_id)
         assert item["tasks_total"] == 1 and item["workflow"] == "demo"
 
