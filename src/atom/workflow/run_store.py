@@ -17,6 +17,21 @@ from atom.workflow.uploads import stored_name, virtual_upload_path
 _ACTIVE = ("pending", "queued", "running")
 
 
+def _is_safe_run_id(run_id: str) -> bool:
+    """A run_id must be a single, non-parent path segment so run-scoped paths can't escape runs_dir.
+
+    run_ids are internally generated (``uuid4().hex[:12]``); rejecting any value with a path
+    separator, a parent/self reference, a NUL, or that is empty closes traversal at the one
+    path-construction chokepoint (``run_dir``) for every run-scoped route and the CLI — e.g. a
+    crafted ``"../runs/<other>"`` would otherwise collapse back onto another run's files.
+    """
+    return (
+        bool(run_id)
+        and run_id not in (".", "..")
+        and not any(ch in run_id for ch in ("/", "\\", "\x00"))
+    )
+
+
 class ArtifactRef(BaseModel):
     name: str            # display name (basename, possibly disambiguated)
     path: str            # original virtual path as presented
@@ -124,6 +139,8 @@ class RunStore:
         return self.home / "workflows" / "queue"
 
     def run_dir(self, run_id: str) -> Path:
+        if not _is_safe_run_id(run_id):
+            raise ValueError(f"unsafe run_id: {run_id!r}")   # hard wall for every path derived from run_dir
         return self.runs_dir / run_id
 
     def workspace_dir(self, run_id: str) -> Path:
@@ -182,6 +199,8 @@ class RunStore:
         os.replace(stmp, sp)           # cheap cache for list_summaries
 
     def load(self, run_id: str) -> RunManifest:
+        if not _is_safe_run_id(run_id):
+            raise FileNotFoundError(run_id)   # an unsafe id can't name a real run — surface as "not found"
         return RunManifest.model_validate_json(self._manifest_path(run_id).read_text("utf-8"))
 
     def list(self) -> list[RunManifest]:
@@ -206,6 +225,8 @@ class RunStore:
         p.write_text(json.dumps(messages, indent=2), encoding="utf-8")
 
     def load_chat(self, run_id: str, step_index: int, task_id: str) -> Optional[list[dict]]:
+        if not _is_safe_run_id(run_id):
+            return None
         p = self.chat_path(run_id, step_index, task_id)
         return json.loads(p.read_text("utf-8")) if p.exists() else None
 
@@ -251,6 +272,8 @@ class RunStore:
         return refs
 
     def artifact_path(self, run_id: str, rel: str) -> Optional[Path]:
+        if not _is_safe_run_id(run_id):
+            return None
         base = self.artifacts_dir(run_id).resolve()
         target = (base / rel).resolve()
         if target != base and not str(target).startswith(str(base) + os.sep):

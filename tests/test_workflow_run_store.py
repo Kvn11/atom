@@ -1,6 +1,7 @@
 """Run manifest persistence (atomic) and chat snapshots."""
 from __future__ import annotations
 
+import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from atom.workflow.run_store import (
@@ -242,3 +243,40 @@ def test_manifest_uploads_path_roundtrips(atom_home):
     m.uploads_path = str(store.uploads_dir("rpp"))
     store.create(m)
     assert store.load("rpp").uploads_path == str(store.uploads_dir("rpp"))
+
+
+# --- run_id path-traversal confinement (defense-in-depth at the path-construction chokepoint) ---
+
+def test_run_dir_rejects_unsafe_run_id(atom_home):
+    store = RunStore(str(atom_home))
+    for bad in ("../evil", "a/b", "..", ".", "x\\y", "n\x00ull", ""):
+        with pytest.raises(ValueError):
+            store.run_dir(bad)
+    assert store.run_dir("abc123def456") == store.runs_dir / "abc123def456"   # legit id unaffected
+
+
+def test_load_blocks_run_id_traversal(atom_home):
+    store = RunStore(str(atom_home))
+    store.create(_manifest("victim", store.workspace_dir("victim")))
+    assert store.load("victim").run_id == "victim"                            # legit load works
+    # runs_dir / "../runs/victim" collapses back onto the victim run — must NOT resolve to it
+    with pytest.raises(FileNotFoundError):
+        store.load("../runs/victim")
+
+
+def test_load_chat_blocks_run_id_traversal(atom_home):
+    store = RunStore(str(atom_home))
+    store.create(_manifest("victim", store.workspace_dir("victim")))
+    store.save_chat("victim", 0, "t1", [{"role": "ai", "text": "secret"}])
+    assert store.load_chat("victim", 0, "t1") == [{"role": "ai", "text": "secret"}]
+    assert store.load_chat("../runs/victim", 0, "t1") is None                 # traversal blocked
+
+
+def test_artifact_path_blocks_run_id_traversal(atom_home):
+    store = RunStore(str(atom_home))
+    store.create(_manifest("victim", store.workspace_dir("victim")))
+    art = store.artifacts_dir("victim") / "s0__t1"
+    art.mkdir(parents=True, exist_ok=True)
+    (art / "secret.txt").write_text("x")
+    assert store.artifact_path("victim", "s0__t1/secret.txt") is not None
+    assert store.artifact_path("../runs/victim", "s0__t1/secret.txt") is None  # traversal blocked
