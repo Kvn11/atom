@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import json
+import re
 
-from atom.observability.run_log import MAX_BODY_CHARS, build_run_log, run_log_bytes
+from atom.observability.run_log import MAX_BODY_CHARS, MAX_RUN_LOG_BYTES, build_run_log, run_log_bytes
 from atom.workflow.run_store import RunManifest, RunStore, StepState, TaskState
 
 
@@ -231,3 +232,30 @@ def test_langfuse_generation_tokens_and_error(atom_home):
     assert poet["tokens"] == {"prompt": 900, "completion": 120, "total": 1020}
     assert poet["tool_failures"] == 1
     assert any(c["type"] == "tool" and not c["ok"] and c["error"] == "boom" for c in log["calls"])
+
+
+def test_small_run_log_not_flagged_oversized(atom_home):
+    _seed_run(atom_home)
+    log = build_run_log(str(atom_home), "r1")
+    assert log["meta"]["oversized"] is False
+    assert not any("read_file" in n for n in log["meta"]["notes"])
+
+
+def test_oversized_run_log_is_flagged_with_note(atom_home):
+    store = _seed_run(atom_home)
+    # ~70 messages of 30,000 chars each: each body is under MAX_BODY_CHARS (32,768) so none is
+    # individually truncated, but the aggregate serialized run-log blows past MAX_RUN_LOG_BYTES.
+    body = "x" * 30_000
+    store.save_chat("r1", 0, "poet_a", [{"role": "ai", "text": body} for _ in range(70)])
+    log = build_run_log(str(atom_home), "r1")
+
+    assert log["meta"]["oversized"] is True
+    assert log["meta"]["truncations"] == []
+    oversize_notes = [n for n in log["meta"]["notes"] if "read_file" in n]
+    assert len(oversize_notes) == 1
+    note = oversize_notes[0]
+    reported_size = int(re.search(r"is (\d+) bytes", note).group(1))
+    assert reported_size > MAX_RUN_LOG_BYTES
+    # the note was measured before it was appended, so the final serialized size (which
+    # includes the note itself) must be at least as large as the size it reports.
+    assert len(run_log_bytes(log)) >= reported_size

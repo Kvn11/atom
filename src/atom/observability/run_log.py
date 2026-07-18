@@ -16,6 +16,7 @@ from typing import Any, Optional
 from atom.workflow.run_store import RunManifest, RunStore
 
 MAX_BODY_CHARS = 32_768
+MAX_RUN_LOG_BYTES = 1_800_000  # warn below the sandbox read_file cap (2,000,000 bytes)
 
 
 def _duration_s(started: Optional[str], ended: Optional[str]) -> Optional[float]:
@@ -219,10 +220,19 @@ def build_run_log(home: str | None, run_id: str) -> dict:
         "transcript": transcript,
         "meta": {
             "provider": None, "export_present": False, "export_complete": False,
-            "truncations": truncations, "notes": [],
+            "truncations": truncations, "notes": [], "oversized": False,
         },
     }
     _enrich(log, store, run_id)
+
+    size = len(run_log_bytes(log))
+    if size > MAX_RUN_LOG_BYTES:
+        log["meta"]["oversized"] = True
+        log["meta"]["notes"].append(
+            f"run-log is {size} bytes, near/above the {2_000_000}-byte read_file limit; the "
+            f"analysis agent may be unable to read the whole file. No messages were dropped — "
+            f"treat the transcript as possibly unreadable in full and lean on the metrics/`calls`."
+        )
     return log
 
 
