@@ -51,6 +51,11 @@ bugs, verbose tool output, config/observability gaps).
   uploads cap at 25 MiB. The compact run-log is mandatory, not an optimization.
 - **A new "reducer"/code step type in the workflow language.** Reduction happens once, in the
   trigger path, before the workflow runs.
+- **Full sub-agent internal transcripts.** atom persists only the lead task transcript
+  (`chats/`); a sub-agent's own step-by-step messages live only in the raw traces, which don't
+  exist on disk to test against and are fragile to parse. Sub-agent **metrics, invocation
+  prompt, and returned result are still captured** (the first two via the lead transcript, the
+  metrics via `calls[]`). Message-by-message sub-agent transcripts are a deferred enhancement.
 
 ## Background — the constraints that shape this
 
@@ -96,39 +101,43 @@ The returned dict:
 - **`steps[]` / `tasks[]`** — per task: `id`, `step_index`, `model`, `thinking`, `status`,
   `error`, `started_at`/`ended_at`, `duration_s`, and — when traces exist — rolled-up
   `tokens` (`prompt`/`completion`/`total`), `llm_calls`, `tool_calls`, `tool_failures`.
-- **`calls[]`** — one entry per traced LLM/tool call: `step`/`task`/`agent` attribution,
-  `type` (`llm`|`tool`), `name`, `duration_s`, `ttft_s?`, `tokens?`, and for tools
-  `ok`/`error` (**error text kept**, capped). This is the raw material for the
-  bottleneck / tool-failure / context-hotspot analysis.
-- **`transcript[]`** — the **deduplicated** conversation, reconstructed from the **traces**
-  when present (see below): every unique message **exactly once**, across the lead agent *and*
-  every sub-agent, attributed by step/task/agent, with `role`, `text`, `thinking`,
-  `tool_calls`, tool results. (`chats/` is the fallback only when traces are absent.)
+- **`calls[]`** — one entry per traced LLM/tool call, from `export.json` when present:
+  `step`/`task`/`agent` attribution (via trace `extra.metadata`), `type` (`llm`|`tool`),
+  `name`, `duration_s`, `ttft_s?`, `tokens?`, and for tools `ok`/`error` (**error text kept**,
+  capped). Read from **stable top-level Run fields only** (`run_type`, `name`, `error`,
+  `start_time`/`end_time`, `prompt_tokens`/`completion_tokens`/`total_tokens`,
+  `extra.metadata`) — **no message-content parsing** — so it robustly covers lead *and*
+  sub-agent calls. This is the raw material for the token / bottleneck / context-hotspot /
+  tool-failure analysis.
+- **`transcript[]`** — sourced from atom's own **`chats/s<step>__<task>.json`** files, the
+  canonical clean transcript (`{role, text, tool_calls, name}`), concatenated across tasks and
+  attributed by step/task. This is where the *what went well/wrong* and per-message context
+  analysis reads.
 - **`meta`** — `provider`, `export_present`, `export_complete`, `truncations[]` (which bodies
   were capped and their original sizes), and degradation flags.
 
-**Transcript reconstruction — the core guarantee.** In a trace, call *k*'s input contains all
-prior messages again (cumulative), which is where the O(n²) bulk comes from. We collapse that
-by **unioning the message lists across an agent's LLM calls, deduplicated, order-preserving**,
-so each unique message survives once. We union across *all* calls rather than trusting the last
-call's history, because atom's own **compaction middleware** can summarize earlier turns away
-mid-run — only the union recovers those messages. Sub-agent threads are grouped by trace
-metadata (`task_id`, `is_subagent`, `agent_role`, `session_id`) and reconstructed the same way.
+**Transcript — the core guarantee.** The duplicate-history bulk (call *k*'s input re-attaching
+all prior messages) lives only in the raw trace file. atom's `chats/` files are already the
+**deduplicated** transcript — the checkpointer keeps one growing thread and `serialize_messages`
+emits **each message exactly once**, with its tool calls and tool results (including tool-error
+text). So the run-log transcript is `chats/` verbatim, per task, and **loses no message**:
+there are no cumulative duplicates to over-trim in the first place.
 
-- **Invariant (unit-tested):** every distinct message that appears in *any* call's input
-  appears **exactly once** in the reconstructed transcript. Dedup key = `(role, name,
-  tool_call_id, content-hash)`.
-- **Oversized body cap:** an individual message body over **32 KB** is trimmed to
-  `first 32 KB + "[truncated N bytes — original M bytes]"`, and the event is recorded in
-  `meta.truncations`. This never drops a message (the turn, role, tool calls, and metadata all
-  survive) — it only trims one giant body, which is itself a context-bloat finding. It is the
-  one thing that could otherwise push the run-log past the 2 MB read cap.
+- **Invariant (unit-tested):** every message in every task's `chats/` file appears in
+  `transcript[]` exactly once, with role/name/tool_calls preserved.
+- **Oversized body cap:** an individual message `text` over **32 KB** is trimmed to
+  `first 32 KB + "[truncated N bytes — original M bytes]"`, recorded in `meta.truncations`.
+  This never drops a message (the turn, role, tool calls, and metadata survive) — it only trims
+  one giant body, which is itself a context-bloat finding, and is the one thing that could push
+  the run-log past the 2 MB read cap.
 
-**Degradation.** If `export.json` is absent or `complete=false` (observability off, or a failed
-run whose traces never ingested), the builder still emits `run`/`steps`/`tasks` from the
-manifest and the transcript from `chats/` (lead only), sets `export_present=false` /
-`export_complete=false`, and omits token/tool-call detail. The workflow still runs; the analysis
-notes the missing data.
+**Degradation.** The transcript (from `chats/`) and per-task status/error/timing (from the
+manifest) are **always** available — no observability required. `calls[]` and token rollups
+require `export.json`; when it is absent or `complete=false` (observability off, or a failed run
+whose traces never ingested), the builder sets `export_present=false`/`export_complete=false`,
+omits token/tool-timing detail, and the analysis notes the gap. Tool-call *failures* are still
+visible either way — as `tool`-role messages in the transcript, and (when traced) in `calls[]`
+with backend error text. The workflow always runs.
 
 ### Component 2 — Trigger endpoint (`POST /api/runs/{run_id}/self-improve` in `api/app.py`)
 
@@ -221,12 +230,13 @@ samples.
 
 ## Testing
 
-- **Run-log builder** (unit): the dedup invariant — every distinct message survives exactly
-  once — including a **compaction** case (a message present in an early call but summarized out
-  of later calls still appears once); tool-failure extraction with error text; token roll-ups;
-  the 32 KB body cap + `meta.truncations`; graceful degradation when `export.json` is
-  absent/`complete=false`. Cover **both** LangSmith (nested `child_runs`) and LangFuse (flat
-  sibling `observations[]`) root shapes with fixtures.
+- **Run-log builder** (unit): transcript = every `chats/` message exactly once with
+  role/tool_calls preserved; the 32 KB body cap + `meta.truncations`; token/timing/tool-failure
+  roll-ups from a synthetic `export.json` dict (nested `child_runs` with `run_type`,
+  `prompt_tokens`, `error`, `extra.metadata.task_id`); attribution of sub-agent calls via
+  `extra.metadata`; and graceful degradation when `export.json` is absent/`complete=false` (the
+  transcript + manifest metrics still emit). LangFuse root shape (flat `observations[]`) covered
+  by a second fixture.
 - **Trigger endpoint** (TestClient): terminal-status gate (409), recursion guard (400),
   missing-target-YAML (404), missing-`self-improve.yaml` (503), and the happy path staging both
   file inputs and returning a new queued `run_id`.
