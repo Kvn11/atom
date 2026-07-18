@@ -113,6 +113,14 @@ class GuardrailConfig(_Base):
     enabled: bool = False
 
 
+class TodosConfig(_Base):
+    # When true, if the lead agent ends a turn with incomplete todos, nudge it to keep going
+    # (up to max_nudges consecutive no-progress stalls) instead of stopping early.
+    continuation_nudge: bool = True
+    # Infinite-loop backstop: max consecutive no-progress nudges before the turn is allowed to end.
+    max_nudges: int = 2
+
+
 class LangfuseConfig(_Base):
     # LangFuse tracing backend. Keys fall back to LANGFUSE_* env vars when unset.
     host: Optional[str] = None            # default https://cloud.langfuse.com (SDK default)
@@ -186,6 +194,7 @@ class AtomConfig(_Base):
     uploads: UploadsConfig = Field(default_factory=UploadsConfig)
     retry: RetryConfig = Field(default_factory=RetryConfig)
     guardrails: GuardrailConfig = Field(default_factory=GuardrailConfig)
+    todos: TodosConfig = Field(default_factory=TodosConfig)
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
     track_usage: bool = True
     agents: dict[str, AgentProfile] = Field(default_factory=lambda: {"default": AgentProfile()})
