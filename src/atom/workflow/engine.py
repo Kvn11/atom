@@ -74,6 +74,7 @@ class WorkflowEngine:
         self.lease = WorkerLease(self.store.queue_dir / "worker.lock")
         self._wake = asyncio.Event()
         self._inflight: set[str] = set()
+        self._cancel_requested: set[str] = set()     # run_ids a user asked to cancel (in-process fast path)
         self._drain_failures: dict[str, int] = {}   # run_id -> consecutive pre-terminal drain failures
         self._quarantine: set[str] = set()          # run_ids that hit max_drain_attempts (skip until restart)
         self._worker_tasks: set[asyncio.Task] = set()
@@ -120,7 +121,7 @@ class WorkflowEngine:
         """Mark a created run as queued (durable + atomic) and wake any in-process worker.
         The job is safe the instant this returns; a worker picks it up in FIFO order."""
         m = self.store.load(run_id)
-        if m.status in ("complete", "halted"):
+        if m.status in ("complete", "halted", "cancelled"):
             return                       # never re-open a terminal run
         m.status = "queued"
         m.enqueued_at = _now_micros()
@@ -228,7 +229,7 @@ class WorkflowEngine:
             # here (its _inflight entry was already cleared) before the scan is retaken. Skip it
             # instead of re-running execute() -- which would crash (its cached WorkflowDef was
             # already popped after the first pass) and clobber a "complete" status with "halted".
-            if self.store.load(run_id).status in ("complete", "halted"):
+            if self.store.load(run_id).status in ("complete", "halted", "cancelled"):
                 return
             await self.execute(run_id)
             self._drain_failures.pop(run_id, None)   # progress made -> reset the failure count
@@ -260,17 +261,47 @@ class WorkflowEngine:
         poll = float(self.cfg.queue.poll_interval_seconds)
         while True:
             m = self.store.load(run_id)
-            if m.status in ("complete", "halted"):
+            if m.status in ("complete", "halted", "cancelled"):
                 return m
             if self.lease.acquire():
                 try:
                     self.recover()
-                    if self.store.load(run_id).status not in ("complete", "halted"):
+                    if self.store.load(run_id).status not in ("complete", "halted", "cancelled"):
                         await self.execute(run_id)
                 finally:
                     self.lease.release()
                 return self.store.load(run_id)
             await asyncio.sleep(poll)
+
+    def _is_cancel_requested(self, run_id: str) -> bool:
+        return run_id in self._cancel_requested or self.store.cancel_requested(run_id)
+
+    def _finalize_cancelled(self, manifest: "RunManifest") -> None:
+        """Terminalize a run as user-cancelled and clear its cancel signal."""
+        manifest.status = "cancelled"
+        manifest.ended_at = _now()
+        self.store.save(manifest)
+        self.store.clear_cancel_marker(manifest.run_id)
+        self._cancel_requested.discard(manifest.run_id)
+
+    def request_cancel(self, run_id: str) -> dict:
+        """Request cancellation of a run. MUST stay synchronous + await-free so it runs
+        atomically relative to the worker coroutines on the shared event loop.
+
+        Queued/pending runs are finalized immediately; a running run is signalled (durable
+        marker + in-process set) and finalized by execute() at its next agent-step boundary.
+        """
+        m = self.store.load(run_id)                       # FileNotFoundError -> API 404
+        if m.status == "cancelled":
+            return {"run_id": run_id, "status": "cancelled", "already": True}
+        if m.status in ("complete", "halted"):
+            return {"run_id": run_id, "status": m.status, "already": True}
+        self.store.write_cancel_marker(run_id, _now_micros())
+        self._cancel_requested.add(run_id)
+        if m.status in ("queued", "pending"):
+            self._finalize_cancelled(m)
+            return {"run_id": run_id, "status": "cancelled"}
+        return {"run_id": run_id, "status": "running", "cancel_requested": True}
 
     # ---- execution ----
     async def execute(self, run_id: str) -> RunManifest:
