@@ -30,6 +30,7 @@ VIRTUAL_WORKSPACE = "/mnt/user-data/workspace"
 VIRTUAL_UPLOADS = "/mnt/user-data/uploads"
 VIRTUAL_OUTPUTS = "/mnt/user-data/outputs"
 VIRTUAL_SKILLS = "/mnt/skills"
+VIRTUAL_SKILL_LIBRARY = "/mnt/skill_library"
 
 
 def atom_home(config_home: str | os.PathLike[str] | None = None) -> Path:
@@ -72,6 +73,7 @@ class ThreadPaths:
             VIRTUAL_UPLOADS: self.uploads,
             VIRTUAL_OUTPUTS: self.outputs,
             VIRTUAL_SKILLS: self.skills,
+            VIRTUAL_SKILL_LIBRARY: self.skill_library,
         }
 
 

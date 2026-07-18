@@ -3,6 +3,7 @@
 from atom.sandbox.paths import (
     ThreadPaths,
     VIRTUAL_OUTPUTS,
+    VIRTUAL_SKILL_LIBRARY,
     VIRTUAL_SKILLS,
     VIRTUAL_UPLOADS,
     VIRTUAL_WORKSPACE,
@@ -21,6 +22,7 @@ __all__ = [
     "VIRTUAL_UPLOADS",
     "VIRTUAL_OUTPUTS",
     "VIRTUAL_SKILLS",
+    "VIRTUAL_SKILL_LIBRARY",
     "LocalSandbox",
     "LocalSandboxProvider",
     "PathEscapeError",
