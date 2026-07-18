@@ -1,5 +1,5 @@
 export interface InputDef { name: string; type?: "text" | "file"; required: boolean; description?: string; default?: string; }
-export interface Workflow { name: string; description?: string; inputs: InputDef[]; }
+export interface Workflow { name: string; description?: string; notes_enabled?: boolean; inputs: InputDef[]; }
 export interface ArtifactRef { name: string; path: string; rel: string; size: number; }
 export interface TaskState {
   id: string; status: string; model?: string; thinking?: string | number;
@@ -95,5 +95,11 @@ export const api = {
       const data = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(data.detail || `cancel failed (${r.status})`);
       return data as { run_id: string; status: string; cancel_requested?: boolean };
+    }),
+  clearNotes: (name: string): Promise<{ workflow: string; cleared: boolean }> =>
+    fetch(`/api/workflows/${encodeURIComponent(name)}/notes`, { method: "DELETE" }).then(async (r) => {
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data.detail || `clear notes failed (${r.status})`);
+      return data as { workflow: string; cleared: boolean };
     }),
 };
