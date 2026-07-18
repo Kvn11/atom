@@ -63,3 +63,26 @@ def test_ensure_vault_custom_graph_name(atom_home):
 def test_ensure_vault_rejects_unknown_provider(atom_home):
     with pytest.raises(NotImplementedError):
         ensure_vault(str(atom_home), "wf", SimpleNamespace(provider="notion", graph=None))
+
+
+def test_clear_vault_removes_existing(atom_home):
+    from atom.notes import clear_vault
+    root = notes_root(str(atom_home), "wf-clear")
+    (root / "pages").mkdir(parents=True)
+    (root / "pages" / "a.md").write_text("note")
+    assert clear_vault(str(atom_home), "wf-clear") is True
+    assert not root.exists()
+
+
+def test_clear_vault_absent_is_noop(atom_home):
+    from atom.notes import clear_vault
+    assert clear_vault(str(atom_home), "never-existed") is False
+
+
+def test_clear_vault_refuses_outside_notes_dir(atom_home, monkeypatch):
+    import atom.notes as notes_mod
+    from pathlib import Path
+    # A pathological notes_root that points outside $ATOM_HOME/notes/ must be refused.
+    monkeypatch.setattr(notes_mod, "notes_root", lambda home, name: Path(home) / "workflows")
+    with pytest.raises(ValueError):
+        notes_mod.clear_vault(str(atom_home), "x")
