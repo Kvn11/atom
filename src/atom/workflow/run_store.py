@@ -353,3 +353,10 @@ class RunStore:
 
     def interrupted_run_ids(self) -> list[str]:
         return [s.run_id for s in self._scan_summaries() if s.status in ("pending", "running")]
+
+    def has_active_runs(self, workflow_name: str) -> bool:
+        """True if any run of ``workflow_name`` is pending/queued/running (non-terminal)."""
+        return any(
+            s.workflow == workflow_name and s.status in _ACTIVE
+            for s in self._scan_summaries()
+        )
