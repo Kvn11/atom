@@ -193,9 +193,22 @@ def create_app(cfg: AtomConfig | None = None, engine: WorkflowEngine | None = No
     @app.get("/api/runs/{run_id}")
     def get_run(run_id: str) -> dict:
         try:
-            return store.load(run_id).model_dump()
+            m = store.load(run_id)
         except FileNotFoundError:
             raise HTTPException(404, "run not found")
+        return {**m.model_dump(), "cancel_requested": store.cancel_requested(run_id)}
+
+    @app.post("/api/runs/{run_id}/cancel")
+    async def cancel_run(run_id: str) -> dict:
+        """Cancel a queued or running run. Queued/pending runs terminalize immediately;
+        a running run stops at its next agent-step boundary (see engine.request_cancel)."""
+        try:
+            res = engine.request_cancel(run_id)
+        except FileNotFoundError:
+            raise HTTPException(404, "run not found")
+        if res.get("already") and res["status"] in ("complete", "halted"):
+            raise HTTPException(409, "run already finished; nothing to cancel")
+        return res
 
     @app.get("/api/runs/{run_id}/tasks/{step}/{task_id}/messages")
     def get_messages(run_id: str, step: int, task_id: str) -> list:

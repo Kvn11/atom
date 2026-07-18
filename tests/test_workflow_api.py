@@ -517,3 +517,47 @@ async def test_multipart_file_under_text_field_key_is_4xx(base_config, atom_home
         # a file uploaded under the 'workflow' form field must be a clean client error, not a 500
         r = await client.post("/api/runs", files={"workflow": ("x.txt", b"x", "text/plain")})
         assert 400 <= r.status_code < 500
+
+
+@pytest.mark.asyncio
+async def test_cancel_unknown_run_is_404(base_config, atom_home):
+    app = create_app(base_config, engine=WorkflowEngine(base_config, prepared_provider=_provider))
+    async with _client(app) as client:
+        r = await client.post("/api/runs/ghost/cancel")
+        assert r.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_cancel_finished_run_is_409(base_config, atom_home, monkeypatch):
+    engine = WorkflowEngine(base_config, prepared_provider=_provider)
+    monkeypatch.setattr(engine, "request_cancel",
+                        lambda rid: {"run_id": rid, "status": "complete", "already": True})
+    app = create_app(base_config, engine=engine)
+    async with _client(app) as client:
+        r = await client.post("/api/runs/x/cancel")
+        assert r.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_cancel_running_run_maps_response(base_config, atom_home, monkeypatch):
+    engine = WorkflowEngine(base_config, prepared_provider=_provider)
+    monkeypatch.setattr(engine, "request_cancel",
+                        lambda rid: {"run_id": rid, "status": "running", "cancel_requested": True})
+    app = create_app(base_config, engine=engine)
+    async with _client(app) as client:
+        r = await client.post("/api/runs/anyid/cancel")
+        assert r.status_code == 200
+        assert r.json() == {"run_id": "anyid", "status": "running", "cancel_requested": True}
+
+
+@pytest.mark.asyncio
+async def test_get_run_exposes_cancel_requested_field(base_config, atom_home):
+    store = _seed_run(atom_home, "rgf")
+    m = store.load("rgf")
+    m.status = "complete"                      # terminal -> untouched by lifespan recover()/worker
+    store.save(m)
+    app = create_app(base_config, engine=WorkflowEngine(base_config, prepared_provider=_provider))
+    async with _client(app) as client:
+        r = await client.get("/api/runs/rgf")
+        assert r.status_code == 200
+        assert r.json()["cancel_requested"] is False
