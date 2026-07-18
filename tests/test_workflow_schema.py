@@ -5,7 +5,7 @@ import pytest
 
 from atom.workflow.schema import (
     MissingInputError, StepDef, TaskDef, WorkflowDef,
-    list_workflows, load_workflow, render_task_prompt, resolve_inputs,
+    list_workflows, load_workflow, render_task_prompt, resolve_inputs, resolve_workflow_path,
 )
 
 
@@ -165,3 +165,34 @@ def test_resolve_inputs_ignores_text_default_for_file_input():
     })
     with pytest.raises(MissingInputError):        # default must NOT satisfy a required file input
         resolve_inputs(wf, {})
+
+
+# --- built-in workflow resolution (self-improve ships bundled; user dir overrides) ---
+
+def test_builtin_workflow_resolves_without_user_dir(atom_home):
+    # empty $ATOM_HOME/workflows/ — the bundled self-improve must still load.
+    wf = load_workflow("self-improve", str(atom_home))
+    assert wf.name == "self-improve"
+
+
+def test_list_workflows_includes_builtins(atom_home):
+    # no user workflows at all -> the built-ins still show up.
+    names = {w.name for w in list_workflows(str(atom_home))}
+    assert "self-improve" in names
+
+
+def test_user_workflow_overrides_builtin_of_same_name(atom_home):
+    # a user file named self-improve.yaml takes precedence over the bundled built-in.
+    _write(atom_home, "self-improve", DEMO.replace("name: demo", "name: self-improve"))
+    path = resolve_workflow_path("self-improve", str(atom_home))
+    assert path == atom_home / "workflows" / "self-improve.yaml"      # user copy wins
+    wf = load_workflow("self-improve", str(atom_home))
+    assert [s.title for s in wf.steps] == ["Draft"]                   # the user's content, not the built-in's
+    names = [w.name for w in list_workflows(str(atom_home))]
+    assert names.count("self-improve") == 1                           # de-duped, not listed twice
+
+
+def test_unknown_workflow_still_raises(atom_home):
+    assert resolve_workflow_path("ghost", str(atom_home)) is None
+    with pytest.raises(FileNotFoundError):
+        load_workflow("ghost", str(atom_home))

@@ -132,10 +132,14 @@ async def test_self_improve_missing_target_yaml(base_config, atom_home):
 
 
 @pytest.mark.asyncio
-async def test_self_improve_missing_workflow_definition_503(base_config, atom_home):
-    _install_target(atom_home)                              # target exists, self-improve.yaml does NOT
+async def test_self_improve_works_from_builtin_without_install(base_config, atom_home):
+    # self-improve.yaml is NOT installed in $ATOM_HOME/workflows/ — it is a bundled built-in,
+    # so the endpoint must still succeed out of the box (no manual copy required).
+    _install_target(atom_home)                              # only the target workflow on disk
     _seed_terminal_run(atom_home)
     app = create_app(base_config, engine=_engine(base_config))
     async with _client(app) as client:
         r = await client.post("/api/runs/r1/self-improve")
-        assert r.status_code == 503
+        assert r.status_code == 202, r.text
+        m = (await client.get(f"/api/runs/{r.json()['run_id']}")).json()
+        assert m["workflow"] == "self-improve"

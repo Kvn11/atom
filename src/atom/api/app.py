@@ -24,7 +24,9 @@ from atom.config.schema import AtomConfig
 from atom.observability.run_log import build_run_log, run_log_bytes
 from atom.workflow.engine import WorkflowEngine
 from atom.workflow.events import channel_key
-from atom.workflow.schema import MissingInputError, list_workflows, load_workflow, workflows_dir
+from atom.workflow.schema import (
+    MissingInputError, list_workflows, load_workflow, resolve_workflow_path,
+)
 from atom.workflow.uploads import (
     UploadTooLarge, UploadTypeNotAllowed, check_extension, check_size, virtual_upload_path,
 )
@@ -346,16 +348,18 @@ def create_app(cfg: AtomConfig | None = None, engine: WorkflowEngine | None = No
         if manifest.workflow == SELF_IMPROVE_WORKFLOW:
             raise HTTPException(400, "cannot self-improve the self-improvement workflow")
 
-        target_path = workflows_dir(cfg.home) / f"{manifest.workflow}.yaml"
-        if not target_path.is_file():
+        target_path = resolve_workflow_path(manifest.workflow, cfg.home)
+        if target_path is None:
             raise HTTPException(404, f"workflow '{manifest.workflow}' no longer exists on disk")
         target_yaml = target_path.read_bytes()
 
         try:
+            # self-improve is a bundled built-in, so this resolves out of the box; the 503 is a
+            # defensive net for a broken install where the package-data went missing.
             wf = load_workflow(SELF_IMPROVE_WORKFLOW, cfg.home)
         except FileNotFoundError:
-            raise HTTPException(503, f"'{SELF_IMPROVE_WORKFLOW}.yaml' is not installed in "
-                                     f"{workflows_dir(cfg.home)} — install it to enable self-improvement")
+            raise HTTPException(503, f"built-in '{SELF_IMPROVE_WORKFLOW}' workflow is missing from "
+                                     f"the installation — the package may be corrupted")
 
         _ensure_export(run_id)                      # best-effort; never blocks
         run_log = build_run_log(cfg.home, run_id)

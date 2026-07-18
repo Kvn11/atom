@@ -56,7 +56,7 @@ atom = "atom.cli:app"
 where = ["src"]
 
 [tool.setuptools.package-data]
-atom = ["prompts/*.md"]
+atom = ["prompts/*.md", "builtin_workflows/*.yaml"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

@@ -167,8 +167,10 @@ workflow, and `suggestions.md`, a report of everything a YAML edit can't fix plu
 Nothing is auto-applied: review the deliverables on the new run and copy the YAML into
 `$ATOM_HOME/workflows/` by hand if you like it.
 
-The feature is itself a workflow, so `workflows/self-improve.yaml` must be installed like any
-other (`cp workflows/self-improve.yaml ~/.atom/workflows/`) — without it the Improve button 503s.
+The feature is itself a workflow, but a **built-in** one: `self-improve.yaml` ships bundled with
+the package (`src/atom/builtin_workflows/`), so the Improve button works out of the box on any
+install — no copy into `$ATOM_HOME/workflows/` required. Placing your own `self-improve.yaml`
+there overrides the built-in if you want to customize it.
 Per-call token/context/timing detail in the analysis requires observability (LangSmith or LangFuse)
 to have been enabled for the *source* run; if it wasn't, the analysis still runs from the manifest
 and transcript alone, just without those metrics.
