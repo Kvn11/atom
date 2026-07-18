@@ -9,6 +9,7 @@ export interface StepState { index: number; title: string; status: string; tasks
 export interface Manifest {
   run_id: string; workflow: string; status: string; inputs: Record<string, unknown>;
   created_at: string; ended_at?: string; workspace_path: string; steps: StepState[];
+  cancel_requested?: boolean;
 }
 export interface ChatMsg {
   role: string; text: string; name?: string;
@@ -23,7 +24,7 @@ export interface RunSummary {
   run_id: string; workflow: string; status: string; created_at: string; ended_at?: string;
   steps_total: number; steps_done: number; tasks_total: number; tasks_done: number; current_step?: string;
 }
-export interface RunsPage { items: RunSummary[]; total: number; counts: { active: number; complete: number; halted: number }; }
+export interface RunsPage { items: RunSummary[]; total: number; counts: { active: number; complete: number; halted: number; cancelled: number }; }
 export interface Artifact extends ArtifactRef { step: number; task: string; }
 export interface ExportResponse {
   run_id: string; scope: "run" | "task"; task_id: string | null;
@@ -86,5 +87,11 @@ export const api = {
       const data = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(data.detail || `self-improve failed (${r.status})`);
       return data as { run_id: string; status: string };
+    }),
+  cancel: (id: string): Promise<{ run_id: string; status: string; cancel_requested?: boolean }> =>
+    fetch(`/api/runs/${id}/cancel`, { method: "POST" }).then(async (r) => {
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data.detail || `cancel failed (${r.status})`);
+      return data as { run_id: string; status: string; cancel_requested?: boolean };
     }),
 };

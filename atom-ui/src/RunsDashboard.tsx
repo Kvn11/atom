@@ -3,7 +3,7 @@ import { api, RunsPage } from "./api";
 import { StatusPill, elapsed, fmtClock, progressText } from "./ui";
 
 const PAGE = 50;
-const FILTERS = ["active", "complete", "halted", "all"] as const;
+const FILTERS = ["active", "complete", "halted", "cancelled", "all"] as const;
 
 export function RunsDashboard({ onOpen }: { onOpen: (id: string) => void }) {
   const [status, setStatus] = useState<string>("active");
@@ -40,7 +40,7 @@ export function RunsDashboard({ onOpen }: { onOpen: (id: string) => void }) {
       <div className="filters">
         {FILTERS.map((f) => (
           <button key={f} className={status === f ? "chip on" : "chip"} onClick={() => setStatus(f)}>
-            {f}{counts && f !== "all" ? <span className="chip-n">{counts[f as "active" | "complete" | "halted"]}</span> : null}
+            {f}{counts && f !== "all" ? <span className="chip-n">{counts[f as "active" | "complete" | "halted" | "cancelled"]}</span> : null}
           </button>
         ))}
       </div>

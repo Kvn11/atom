@@ -2,7 +2,7 @@ import { RunSummary } from "./api";
 
 export const STATUS_CLASS: Record<string, string> = {
   pending: "idle", running: "warn", succeeded: "ok", failed: "err",
-  complete: "ok", halted: "err",
+  complete: "ok", halted: "err", cancelled: "idle",
 };
 
 export function StatusPill({ status }: { status: string }) {
