@@ -4,6 +4,9 @@ Orchestrates a run over its steps: steps run sequentially, tasks within a step r
 concurrently (bounded by a semaphore), every task is a ``run_agent`` call bound to the run's
 one shared workspace (existing-workspace mode) under its own thread id. A step progresses only
 if every task succeeds; otherwise the run halts and later steps never run.
+A run can also be cancelled cooperatively: signaled by a durable ``cancel.request`` marker plus
+an in-process set, it stops at the next task/step boundary and is finalized with terminal status
+``cancelled``.
 """
 from __future__ import annotations
 

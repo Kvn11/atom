@@ -265,7 +265,7 @@ def workflow_run(
     for step in manifest.steps:
         marks = ", ".join(f"{t.id}:{t.status}" for t in step.tasks)
         console.print(f"  [bold]{step.title}[/bold] [dim]{step.status}[/dim] — {marks}")
-    color = "green" if manifest.status == "complete" else "red"
+    color = "green" if manifest.status == "complete" else "yellow" if manifest.status == "cancelled" else "red"
     console.print(f"\n[{color} bold]{manifest.status}[/{color} bold]  [dim]run: {run_id}[/dim]")
     ws = engine.store.workspace_dir(run_id)
     files = [p for p in ws.rglob("*") if p.is_file()] if ws.is_dir() else []
