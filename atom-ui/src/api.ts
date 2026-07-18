@@ -20,6 +20,8 @@ export type StreamBlock =
   | { kind: "text"; text: string }
   | { kind: "tool_call"; id?: string; name?: string; args?: Record<string, unknown> }
   | { kind: "tool_result"; name?: string; text: string; isError: boolean };
+export type TodoStatus = "pending" | "in_progress" | "completed";
+export interface Todo { content: string; status: TodoStatus; }
 export interface RunSummary {
   run_id: string; workflow: string; status: string; created_at: string; ended_at?: string;
   steps_total: number; steps_done: number; tasks_total: number; tasks_done: number; current_step?: string;
