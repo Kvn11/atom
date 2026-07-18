@@ -32,10 +32,24 @@ export function RunForm(
   const [files, setFiles] = useState<Record<string, File>>({});
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [notesMsg, setNotesMsg] = useState("");
+  const [clearing, setClearing] = useState(false);
   const submit = async () => {
     setError(""); setBusy(true);
     try { const { run_id } = await api.submit(workflow.name, values, files); onStarted(run_id); }
     catch (e) { setError(String(e instanceof Error ? e.message : e)); setBusy(false); }
+  };
+  const clearNotes = async () => {
+    if (!window.confirm(`Delete the persistent notes vault for "${workflow.name}"?`)) return;
+    setNotesMsg(""); setClearing(true);
+    try {
+      const { cleared } = await api.clearNotes(workflow.name);
+      setNotesMsg(cleared ? "Notes vault cleared." : "No notes vault existed.");
+    } catch (e) {
+      setNotesMsg(String(e instanceof Error ? e.message : e));
+    } finally {
+      setClearing(false);
+    }
   };
   return (
     <div className="page narrow">
@@ -63,6 +77,14 @@ export function RunForm(
         </label>
       ))}
       <button className="primary" disabled={busy} onClick={submit}>{busy ? "Starting…" : "Start run"}</button>
+      {workflow.notes_enabled && (
+        <div className="notes-actions">
+          <button className="link" disabled={clearing} onClick={clearNotes}>
+            {clearing ? "Clearing…" : "Clear notes vault"}
+          </button>
+          {notesMsg && <span className="field-hint">{notesMsg}</span>}
+        </div>
+      )}
       {error && <div className="error">{error}</div>}
     </div>
   );

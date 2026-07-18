@@ -308,3 +308,31 @@ def test_list_summaries_counts_cancelled(atom_home):
     page = store.list_summaries(status="all")
     assert page["counts"]["cancelled"] == 1
     assert page["counts"]["active"] == 0
+
+
+def test_has_active_runs_true_for_running(atom_home):
+    store = RunStore(str(atom_home))
+    m = _manifest("ha1", store.workspace_dir("ha1"))
+    m.workflow = "wf-x"; m.status = "running"
+    store.create(m)
+    assert store.has_active_runs("wf-x") is True
+    assert store.has_active_runs("wf-other") is False
+
+
+def test_has_active_runs_false_for_terminal(atom_home):
+    store = RunStore(str(atom_home))
+    m = _manifest("ha2", store.workspace_dir("ha2"))
+    m.workflow = "wf-y"; m.status = "complete"
+    store.create(m)
+    assert store.has_active_runs("wf-y") is False
+
+
+def test_has_active_runs_matches_on_slug_not_raw_name(atom_home):
+    store = RunStore(str(atom_home))
+    m = _manifest("hs1", store.workspace_dir("hs1"))
+    m.workflow = "Weekly Report"; m.status = "running"
+    store.create(m)
+    # A differently-cased/spaced name that slugifies identically must still trip the gate.
+    assert store.has_active_runs("weekly report") is True
+    assert store.has_active_runs("weekly-report") is True
+    assert store.has_active_runs("something-else") is False

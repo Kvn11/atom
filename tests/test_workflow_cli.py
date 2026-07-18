@@ -131,3 +131,36 @@ def test_workflow_run_malformed_file_token_errors(atom_home):
     result = runner.invoke(app, ["workflow", "run", "docwf", "--file", "doc"])  # missing =path
     assert result.exit_code != 0
     assert "NAME=PATH" in result.stdout or "=" in result.stdout
+
+
+def test_workflow_notes_clear_removes_vault(atom_home):
+    from atom.notes import notes_root
+    root = notes_root(str(atom_home), "demo")
+    (root / "pages").mkdir(parents=True)
+    result = runner.invoke(app, ["workflow", "notes", "clear", "demo", "--yes"])
+    assert result.exit_code == 0
+    assert not root.exists()
+    assert "Cleared" in result.stdout
+
+
+def test_workflow_notes_clear_noop_when_absent(atom_home):
+    result = runner.invoke(app, ["workflow", "notes", "clear", "ghost", "--yes"])
+    assert result.exit_code == 0
+    assert "No notes vault" in result.stdout
+
+
+def test_workflow_notes_clear_refuses_when_active_run(atom_home):
+    from atom.workflow.run_store import RunManifest, RunStore, StepState, TaskState
+    store = RunStore(str(atom_home))
+    m = RunManifest(
+        run_id="cc1", workflow="demo", created_at="2026-07-18T00:00:00",
+        workspace_path=str(store.workspace_dir("cc1")),
+        steps=[StepState(index=0, title="S", tasks=[TaskState(id="t1", thread_id="cc1:s0:t1")])],
+    )
+    m.status = "running"
+    store.create(m)
+    (store.home / "notes" / "demo").mkdir(parents=True, exist_ok=True)
+    result = runner.invoke(app, ["workflow", "notes", "clear", "demo", "--yes"])
+    assert result.exit_code == 1
+    assert "active" in result.stdout.lower()
+    assert (store.home / "notes" / "demo").exists()   # not touched
