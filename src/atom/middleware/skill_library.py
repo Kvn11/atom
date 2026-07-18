@@ -15,6 +15,7 @@ from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import HumanMessage
 
 from atom.library import parse_skill_md
+from atom.sandbox.paths import VIRTUAL_SKILLS, VIRTUAL_SKILL_LIBRARY
 
 
 class SkillLibraryMiddleware(AgentMiddleware):
@@ -22,13 +23,17 @@ class SkillLibraryMiddleware(AgentMiddleware):
         super().__init__()
         self.home = Path(home)
 
-    def _bodies(self, names: list[str]) -> list[tuple[str, str]]:
-        out: list[tuple[str, str]] = []
+    def _bodies(self, names: list[str]) -> list[tuple[str, str, str]]:
+        out: list[tuple[str, str, str]] = []
         for name in names:
-            for base in (self.home / "skill_library", self.home / "skills"):
+            for base, mount in (
+                (self.home / "skill_library", VIRTUAL_SKILL_LIBRARY),
+                (self.home / "skills", VIRTUAL_SKILLS),
+            ):
                 md = base / name / "SKILL.md"
                 if md.exists():
-                    out.append((name, parse_skill_md(md.read_text(encoding="utf-8"), name).body))
+                    body = parse_skill_md(md.read_text(encoding="utf-8"), name).body
+                    out.append((name, mount, body))
                     break
         return out
 
@@ -37,7 +42,9 @@ class SkillLibraryMiddleware(AgentMiddleware):
         bodies = self._bodies(names)
         if not bodies:
             return request
-        text = "\n\n---\n\n".join(f"# Skill: {n}\n\n{b}" for n, b in bodies)
+        text = "\n\n---\n\n".join(
+            f"# Skill: {n} (bundled files: {mount}/{n}/)\n\n{b}" for n, mount, b in bodies
+        )
         note = HumanMessage(content=f"[Active skill guide(s) — follow these]\n\n{text}")
         return request.override(messages=[*request.messages, note])
 
