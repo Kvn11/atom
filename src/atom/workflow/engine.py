@@ -334,11 +334,16 @@ class WorkflowEngine:
             for step_state, step_def in zip(manifest.steps, workflow.steps):
                 if step_state.status == "complete":
                     continue                       # resume: this step finished in a prior life
+                if self._is_cancel_requested(run_id):       # CHECK A: don't start a new step
+                    self._finalize_cancelled(manifest)
+                    return manifest
                 step_state.status = "running"
                 self.store.save(manifest)
 
                 async def run_one(ts: TaskState, td: TaskDef, sd: StepDef, ss: StepState):
                     async with sem:
+                        if self._is_cancel_requested(run_id):   # CHECK B: don't start a queued task
+                            return
                         await self._run_task(manifest, workflow, ss, sd, ts, td, notes=notes_binding)
 
                 pending = [
@@ -351,6 +356,9 @@ class WorkflowEngine:
 
                 step_state.status = compute_step_status([t.status for t in step_state.tasks])
                 self.store.save(manifest)
+                if self._is_cancel_requested(run_id):       # CHECK C: don't advance to the next step
+                    self._finalize_cancelled(manifest)
+                    return manifest
                 if step_state.status != "complete":
                     manifest.status = "halted"
                     manifest.ended_at = _now()
@@ -451,16 +459,21 @@ class WorkflowEngine:
                 on_event=(emitter.emit if emitter else None),
                 obs_provider=self.obs_provider,
                 on_transcript=_persist_partial,
+                should_cancel=lambda: self._is_cancel_requested(manifest.run_id),
             )
             result = await (asyncio.wait_for(coro, timeout) if timeout else coro)
             self.store.save_chat(
                 manifest.run_id, step_state.index, ts.id, serialize_messages(result.messages)
             )
-            presented = (result.state or {}).get("artifacts", [])
-            ts.artifacts = self.store.capture_artifacts(
-                manifest.run_id, step_state.index, ts.id, presented,
-            )
-            ts.status = "succeeded"
+            if getattr(result, "cancelled", False):
+                ts.status = "failed"
+                ts.error = "cancelled"
+            else:
+                presented = (result.state or {}).get("artifacts", [])
+                ts.artifacts = self.store.capture_artifacts(
+                    manifest.run_id, step_state.index, ts.id, presented,
+                )
+                ts.status = "succeeded"
         except asyncio.CancelledError:
             ts.status = "failed"
             ts.error = "cancelled"
