@@ -98,7 +98,8 @@ function argSummary(args?: Record<string, unknown>): string {
   return Object.keys(a).slice(0, 2).map((k) => `${k}=${String(a[k]).slice(0, 40)}`).join(", ");
 }
 
-export function RunView({ runId, onBack }: { runId: string; onBack: () => void }) {
+export function RunView({ runId, onBack, onOpenRun }:
+  { runId: string; onBack: () => void; onOpenRun?: (id: string) => void }) {
   const [manifest, setManifest] = useState<Manifest | null>(null);
   const [arts, setArts] = useState<Artifact[]>([]);
   const [sel, setSel] = useState<Sel | null>(null);
@@ -106,6 +107,8 @@ export function RunView({ runId, onBack }: { runId: string; onBack: () => void }
   const [openArt, setOpenArt] = useState<Artifact | null>(null);
   const [exporting, setExporting] = useState<"run" | "task" | null>(null);
   const [exportMsg, setExportMsg] = useState<{ text: string; kind: "ok" | "warn" | "err"; href?: string } | null>(null);
+  const [improving, setImproving] = useState(false);
+  const [improveMsg, setImproveMsg] = useState<{ text: string; kind: "ok" | "err"; runId?: string } | null>(null);
 
   useEffect(() => {
     let live = true;
@@ -165,6 +168,19 @@ export function RunView({ runId, onBack }: { runId: string; onBack: () => void }
     }
   };
 
+  const runSelfImprove = async () => {
+    setImproving(true);
+    setImproveMsg(null);
+    try {
+      const res = await api.selfImprove(runId);
+      setImproveMsg({ text: "Self-improvement run started", kind: "ok", runId: res.run_id });
+    } catch (e) {
+      setImproveMsg({ text: e instanceof Error ? e.message : String(e), kind: "err" });
+    } finally {
+      setImproving(false);
+    }
+  };
+
   return (
     <div className="runview">
       <div className="run-head">
@@ -185,6 +201,16 @@ export function RunView({ runId, onBack }: { runId: string; onBack: () => void }
                 : "Available once all steps complete"}>
               {exporting === "run" ? "Exporting…" : "Export run"}
             </button>
+            {manifest.workflow !== "self-improve" && (
+              <button className="btn-sm"
+                disabled={!(manifest.status === "complete" || manifest.status === "halted") || improving}
+                onClick={() => runSelfImprove()}
+                title={(manifest.status === "complete" || manifest.status === "halted")
+                  ? "Analyze this run and draft an improved workflow"
+                  : "Available once the run finishes"}>
+                {improving ? "Improving…" : "Improve"}
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -196,6 +222,18 @@ export function RunView({ runId, onBack }: { runId: string; onBack: () => void }
             <a className="export-dl" href={exportMsg.href} download>Download export ↓</a>
           )}
           <button className="export-x" onClick={() => setExportMsg(null)} title="Dismiss">✕</button>
+        </div>
+      )}
+
+      {improveMsg && (
+        <div className={`export-banner ${improveMsg.kind}`}>
+          <span className="export-text">{improveMsg.text}</span>
+          {improveMsg.runId && onOpenRun && (
+            <button className="export-dl" onClick={() => onOpenRun(improveMsg.runId!)}>
+              View self-improvement run →
+            </button>
+          )}
+          <button className="export-x" onClick={() => setImproveMsg(null)} title="Dismiss">✕</button>
         </div>
       )}
 

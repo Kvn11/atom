@@ -81,4 +81,10 @@ export const api = {
       if (!r.ok) throw new Error(data.detail || `export failed (${r.status})`);
       return data as ExportResponse;
     }),
+  selfImprove: (id: string): Promise<{ run_id: string; status: string }> =>
+    fetch(`/api/runs/${id}/self-improve`, { method: "POST" }).then(async (r) => {
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data.detail || `self-improve failed (${r.status})`);
+      return data as { run_id: string; status: string };
+    }),
 };

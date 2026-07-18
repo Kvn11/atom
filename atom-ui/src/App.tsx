@@ -47,7 +47,10 @@ export default function App() {
             onBack={() => setView({ name: "workflows" })} />
         )}
         {view.name === "runs" && <RunsDashboard onOpen={(id) => setView({ name: "run", runId: id })} />}
-        {view.name === "run" && <RunView runId={view.runId} onBack={() => setView({ name: "runs" })} />}
+        {view.name === "run" && (
+          <RunView runId={view.runId} onBack={() => setView({ name: "runs" })}
+            onOpenRun={(id) => setView({ name: "run", runId: id })} />
+        )}
       </main>
     </div>
   );
