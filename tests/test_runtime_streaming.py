@@ -100,6 +100,7 @@ async def test_should_cancel_stops_stream_and_flags_result(base_config):
     result = await run_agent("hi", config=base_config, prepared=prepared,
                              on_event=on_event, should_cancel=lambda: True)
     assert result.cancelled is True
+    assert result.final_text.strip() != "alpha beta gamma"   # stopped before completing the stream
 
 
 @pytest.mark.asyncio

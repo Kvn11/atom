@@ -109,6 +109,10 @@ async def run_agent(
     ``on_transcript`` is a failure hook: if the agent loop raises, whatever messages the
     checkpointer has persisted so far are recovered and handed to it (best-effort) BEFORE the
     error is re-raised, so a failed run's partial transcript can still be saved for later viewing.
+
+    ``should_cancel`` is a cooperative-stop hook checked at agent-step (``updates``) boundaries in
+    the streaming path; when it returns true the run stops and returns ``RunResult(cancelled=True)``
+    with the partial transcript. The non-streaming ``ainvoke`` path has no loop and ignores it.
     """
     cfg = config or load_config(config_path)
     profile_name = profile or cfg.defaults.agent
@@ -147,32 +151,40 @@ async def run_agent(
             if on_event is not None and cfg.streaming.enabled:
                 from atom.streaming import translate_message_chunk, translate_update
 
-                async for item in agent.astream(
+                stream = agent.astream(
                     inp, config=run_config, context=context, stream_mode=["messages", "updates"],
-                ):
-                    # Compiled-graph astream yields (mode, data) tuples; the create_agent sugar yields
-                    # {"type","data"} dicts. Normalize both so the translator sees one shape.
-                    mode, data = item if isinstance(item, tuple) else (item.get("type"), item.get("data"))
-                    if mode == "messages":
-                        chunk, metadata = data
-                        # "model" is create_agent's dedicated node for the primary agent-loop LLM
-                        # call (langchain.agents.factory: graph.add_node("model", ...)). Middleware
-                        # hooks are their own nodes too (e.g. "TitleMiddleware.after_model"), and any
-                        # out-of-band model.invoke() they make (title generation reusing the lead
-                        # model when no summarizer_model is configured) is still captured by
-                        # stream_mode="messages" — filter to the real node so that text doesn't
-                        # duplicate into the live stream.
-                        if (metadata or {}).get("langgraph_node") == "model":
-                            for ev in translate_message_chunk(chunk, metadata):
-                                await on_event(ev)
-                    elif mode == "updates":
-                        for _node, update in (data or {}).items():
-                            msgs = update.get("messages") if isinstance(update, dict) else None
-                            for ev in translate_update(msgs or []):
-                                await on_event(ev)
-                        if should_cancel is not None and should_cancel():
-                            cancelled = True
-                            break
+                )
+                try:
+                    async for item in stream:
+                        # Compiled-graph astream yields (mode, data) tuples; the create_agent sugar yields
+                        # {"type","data"} dicts. Normalize both so the translator sees one shape.
+                        mode, data = item if isinstance(item, tuple) else (item.get("type"), item.get("data"))
+                        if mode == "messages":
+                            chunk, metadata = data
+                            # "model" is create_agent's dedicated node for the primary agent-loop LLM
+                            # call (langchain.agents.factory: graph.add_node("model", ...)). Middleware
+                            # hooks are their own nodes too (e.g. "TitleMiddleware.after_model"), and any
+                            # out-of-band model.invoke() they make (title generation reusing the lead
+                            # model when no summarizer_model is configured) is still captured by
+                            # stream_mode="messages" — filter to the real node so that text doesn't
+                            # duplicate into the live stream.
+                            if (metadata or {}).get("langgraph_node") == "model":
+                                for ev in translate_message_chunk(chunk, metadata):
+                                    await on_event(ev)
+                        elif mode == "updates":
+                            for _node, update in (data or {}).items():
+                                msgs = update.get("messages") if isinstance(update, dict) else None
+                                for ev in translate_update(msgs or []):
+                                    await on_event(ev)
+                            if should_cancel is not None and should_cancel():
+                                cancelled = True
+                                break
+                finally:
+                    # A bare `break` leaves the async generator dangling and races the async-durability
+                    # checkpoint write; aclose() deterministically finalizes the Pregel run (settles the
+                    # completed tick's writes, drops the aborted one, releases background tasks) before we
+                    # read state. It's a no-op on natural exhaustion.
+                    await stream.aclose()
                 # aget_state gives the authoritative final channel values (messages + artifacts + title),
                 # equivalent to what ainvoke returned — the checkpointer is still open in this context.
                 result = (await agent.aget_state(run_config)).values
