@@ -10,6 +10,7 @@ from langchain.tools import ToolRuntime, tool
 from langgraph.types import Command
 
 from atom.library import get_index
+from atom.sandbox.paths import VIRTUAL_SKILLS, VIRTUAL_SKILL_LIBRARY
 from atom.tools.common import thread_id_of
 
 
@@ -88,10 +89,13 @@ def load_skill(runtime: ToolRuntime, name: str) -> Command:
     if not clean or "/" in clean or "\\" in clean or ".." in clean:
         return Command(update={"messages": [ToolMessage(f"Invalid skill name '{name}'.", tool_call_id=tcid)]})
     home = _home(runtime)
-    found = bool(home) and any(
-        (Path(home) / base / clean / "SKILL.md").exists() for base in ("skills", "skill_library")
-    )
-    if not found:
+    mount: str | None = None
+    if home:
+        if (Path(home) / "skills" / clean / "SKILL.md").exists():
+            mount = VIRTUAL_SKILLS
+        elif (Path(home) / "skill_library" / clean / "SKILL.md").exists():
+            mount = VIRTUAL_SKILL_LIBRARY
+    if mount is None:
         return Command(update={"messages": [ToolMessage(
             f"No skill named '{clean}' found. Check the skills catalog or use search_skills.",
             tool_call_id=tcid)]})
@@ -99,5 +103,6 @@ def load_skill(runtime: ToolRuntime, name: str) -> Command:
     return Command(update={
         "promoted_skills": [clean],
         "messages": [ToolMessage(
-            f"Loaded skill '{clean}'. Follow its instructions for this task.", tool_call_id=tcid)],
+            f"Loaded skill '{clean}'. Follow its instructions for this task. "
+            f"Its bundled files are at {mount}/{clean}/.", tool_call_id=tcid)],
     })

@@ -170,3 +170,33 @@ def test_sandbox_reads_from_overridden_uploads_mount(atom_home, tmp_path):
     (shared / "doc.txt").write_text("hello from upload\n")
     sb = LocalSandboxProvider().acquire(thread_paths("u", "tread", uploads_override=str(shared)))
     assert sb.read_text("/mnt/user-data/uploads/doc.txt") == "hello from upload\n"
+
+
+def test_skill_library_mount_maps_to_physical_dir(atom_home):
+    from atom.sandbox.paths import VIRTUAL_SKILL_LIBRARY
+    tp = thread_paths("u", "skl-map")
+    assert tp.virtual_map()[VIRTUAL_SKILL_LIBRARY] == tp.skill_library
+
+
+def test_sandbox_reads_bundled_file_from_skill_library_mount(atom_home):
+    tp = thread_paths("u", "skl-read").ensure()
+    skill = tp.skill_library / "pdf-extract"
+    skill.mkdir(parents=True)
+    (skill / "reference.md").write_text("bundled reference body\n")
+    sb = LocalSandboxProvider().acquire(thread_paths("u", "skl-read"))
+    assert sb.read_text("/mnt/skill_library/pdf-extract/reference.md") == "bundled reference body\n"
+
+
+def test_skill_library_mount_confines_escapes(atom_home):
+    sb = _sandbox("skl-esc")
+    with pytest.raises((PathEscapeError, FileNotFoundError)):
+        sb.resolve("/mnt/skill_library/../../../../etc/passwd")
+
+
+def test_skills_and_skill_library_are_distinct_roots(atom_home):
+    tp = thread_paths("u", "skl-distinct")
+    vm = tp.virtual_map()
+    from atom.sandbox.paths import VIRTUAL_SKILLS, VIRTUAL_SKILL_LIBRARY
+    assert vm[VIRTUAL_SKILLS] == tp.skills
+    assert vm[VIRTUAL_SKILL_LIBRARY] == tp.skill_library
+    assert tp.skills != tp.skill_library

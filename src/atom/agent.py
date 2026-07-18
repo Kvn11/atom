@@ -21,6 +21,7 @@ from atom.models import build_model, clamp_concurrency, model_caps, resolve_cont
 from atom.prompts import render_prompt
 from atom.sandbox.paths import (
     VIRTUAL_OUTPUTS,
+    VIRTUAL_SKILL_LIBRARY,
     VIRTUAL_SKILLS,
     VIRTUAL_UPLOADS,
     VIRTUAL_WORKSPACE,
@@ -73,6 +74,7 @@ def render_lead_system_prompt(
         "uploads": VIRTUAL_UPLOADS,
         "outputs": VIRTUAL_OUTPUTS,
         "skills": VIRTUAL_SKILLS,
+        "skill_library": VIRTUAL_SKILL_LIBRARY,
         # The EFFECTIVE bound tool names (post capability/bash filtering), not the raw config list,
         # so the prompt never advertises a tool that isn't actually available to the model.
         "frequent_tool_names": frequent_tool_names if frequent_tool_names is not None else profile.tools.frequent,

@@ -5,8 +5,9 @@ You operate over a virtual filesystem. Always use these virtual paths:
 - `{{ workspace }}` — your working directory for scratch work, code, and intermediate files.
 - `{{ uploads }}` — read-only files the user provided.
 - `{{ outputs }}` — where finished deliverables belong.
-- `{{ skills }}` — reference skill documents.
-File tools accept these virtual paths or a path relative to the workspace. Paths outside these mounts are rejected.
+- `{{ skills }}` — reference skill documents (always-on skills).
+- `{{ skill_library }}` — files bundled with skills you load via `load_skill`.
+File tools accept these virtual paths or a path relative to the workspace. Paths outside these mounts are rejected. A skill's bundled files live under `{{ skills }}/<skill-name>/` (always-on skills) or `{{ skill_library }}/<skill-name>/` (skills you load on demand).
 {% if skill_catalog %}
 # Skills (load before use)
 These skills are available. Before using one, load its full instructions with `load_skill("<name>")`.

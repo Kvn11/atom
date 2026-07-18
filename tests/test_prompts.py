@@ -177,6 +177,17 @@ async def test_load_skill_tool_bound_when_skill_present(base_config, atom_home):
     assert any("Loaded skill 'logseq-cli'" in m.content for m in tool_msgs)
 
 
+def test_lead_prompt_advertises_skill_library_mount(base_config):
+    from atom.agent import render_lead_system_prompt
+
+    prof = base_config.profile("default")
+    out = render_lead_system_prompt(
+        base_config, prof, "default", {"supports_vision": True},
+        frequent_tool_names=["read_file"],
+    )
+    assert "/mnt/skill_library" in out
+
+
 def test_subagent_prompts_render_and_report_contract():
     from atom.prompts.render import render_prompt
 

@@ -252,3 +252,28 @@ async def test_search_tools_promotes_at_most_auto_promote_k(base_config, atom_ho
     ])
     result = await run_agent("count things", config=base_config, prepared=prepared)
     assert len(result.state.get("promoted", {}).get("names", [])) == 1  # bounded by auto_promote_k
+
+
+def test_skill_library_injection_includes_bundled_files_location(atom_home):
+    from atom.middleware.skill_library import SkillLibraryMiddleware
+
+    seed_library(atom_home)  # skill_library/pdf-extract
+    mw = SkillLibraryMiddleware(home=str(atom_home))
+    req = _FakeRequest(tools=[], state={"promoted_skills": ["pdf-extract"]},
+                       messages=[AIMessage(content="hi")])
+    text = "\n".join(str(m.content) for m in mw._inject(req).messages)
+    assert "/mnt/skill_library/pdf-extract/" in text
+    assert "extract each page" in text  # body still injected
+
+
+def test_skill_activation_injection_includes_bundled_files_location(atom_home):
+    from atom.middleware.skill_activation import SkillActivationMiddleware
+
+    d = atom_home / "skills" / "demo-skill"
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text("---\nname: demo-skill\ndescription: x\n---\nDEMO BODY")
+    mw = SkillActivationMiddleware(home=str(atom_home))
+    req = _FakeRequest(tools=[], state={}, messages=[HumanMessage(content="/demo-skill go")])
+    text = "\n".join(str(m.content) for m in mw._inject(req).messages)
+    assert "/mnt/skills/demo-skill/" in text
+    assert "DEMO BODY" in text
