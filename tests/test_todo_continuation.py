@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import pytest
 from langchain_core.messages import AIMessage
 
 from atom.middleware.todo_continuation import TodoContinuationMiddleware, _NUDGE_SOURCE
+from atom.runtime import run_agent
 
 
 def _todo(content, status):
@@ -118,3 +120,98 @@ def test_nudge_middleware_absent_when_disabled(base_config, atom_home):
     base_config.todos.continuation_nudge = False
     chain = _build_chain(base_config, atom_home)
     assert not any(isinstance(m, TodoContinuationMiddleware) for m in chain)
+
+
+def _wt_call(content, status, cid):
+    # A write_todos tool call setting a single todo to `status`.
+    return AIMessage(
+        content="",
+        tool_calls=[{
+            "name": "write_todos",
+            "args": {"todos": [{"content": content, "status": status}]},
+            "id": cid, "type": "tool_call",
+        }],
+    )
+
+
+# The shared ScriptedChatModel returns the SAME AIMessage object on every clamp, and
+# add_messages dedupes by id -- so a stalling model's repeated identical answer would merge in
+# place instead of appending, starving the nudge loop (a fake-model artifact, not real-LLM
+# behavior). This local model stamps a fresh id per call so repeated stalls append like a real
+# LLM would.
+def _prepared_unique(responses):
+    import itertools
+
+    from langchain_core.outputs import ChatGeneration, ChatResult
+
+    from atom.agent import PreparedModel
+    from tests.conftest import DEFAULT_PROFILE_DATA, ScriptedChatModel
+
+    counter = itertools.count()
+
+    class _UniqueScriptedModel(ScriptedChatModel):
+        def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+            idx = min(self._i, len(self.responses) - 1)
+            self._i += 1
+            src = self.responses[idx]
+            msg = AIMessage(
+                content=src.content,
+                tool_calls=list(src.tool_calls or []),
+                id=f"ai-{next(counter)}",
+            )
+            return ChatResult(generations=[ChatGeneration(message=msg)])
+
+    model = _UniqueScriptedModel(responses=responses, profile=DEFAULT_PROFILE_DATA)
+    caps = {
+        "context_window": model.profile["max_input_tokens"],
+        "max_output_tokens": model.profile["max_output_tokens"],
+        "supports_vision": model.profile["image_inputs"],
+        "supports_reasoning": model.profile["reasoning_output"],
+        "has_profile": True,
+    }
+    return PreparedModel(model=model, caps=caps, context_window=caps["context_window"])
+
+
+@pytest.mark.asyncio
+async def test_run_continues_then_bounds_when_todos_incomplete(base_config):
+    # Plan one in_progress todo, then keep stalling with a plain answer. The nudge should re-drive
+    # the model each stall, then stop after max_nudges (default 2) -- proving it both continues and
+    # is bounded (no infinite loop / recursion crash).
+    prepared = _prepared_unique([
+        _wt_call("build the thing", "in_progress", "wt1"),
+        AIMessage(content="still working on it"),
+    ])
+    result = await run_agent("do the thing", config=base_config, prepared=prepared)
+
+    # Terminated cleanly with the stall answer as the final text (not a nudge message).
+    assert result.final_text == "still working on it"
+    # Exactly max_nudges continuation nudges were injected -> continued AND bounded.
+    nudges = [
+        m for m in result.messages
+        if getattr(m, "additional_kwargs", {}).get("lc_source") == _NUDGE_SOURCE
+    ]
+    assert len(nudges) == base_config.todos.max_nudges == 2
+    # The todo is still incomplete (the scripted model never marked it done) -> the run stopped
+    # because the nudge budget was exhausted, not because the plan was finished.
+    assert any(t["status"] != "completed" for t in result.state.get("todos", []))
+
+
+@pytest.mark.asyncio
+async def test_per_turn_reset_clears_stale_todos_across_turns(base_config):
+    from tests.conftest import make_prepared
+
+    # Turn 1: plan + immediately complete one todo, then answer (no nudge — all complete).
+    turn1 = make_prepared([
+        _wt_call("do it", "completed", "wt1"),
+        AIMessage(content="Finished."),
+    ])
+    r1 = await run_agent("first task", config=base_config, prepared=turn1)
+    assert [t["status"] for t in r1.state.get("todos", [])] == ["completed"]
+
+    # Turn 2 on the SAME thread: a plain answer. before_agent must clear turn 1's todos.
+    turn2 = make_prepared([AIMessage(content="Hi there.")])
+    r2 = await run_agent(
+        "unrelated follow-up", config=base_config, prepared=turn2, thread_id=r1.thread_id
+    )
+    assert r2.final_text == "Hi there."
+    assert r2.state.get("todos", []) == []  # stale plan was reset, so no nudge could mis-fire
