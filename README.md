@@ -155,6 +155,24 @@ also available from the web UI (**Export run** in the run header, **Export task*
 toolbar). It is the input to the separate offline evaluation pipeline. Runs executed without
 observability have nothing to download (the command reports "no traces found").
 
+### Self-improving workflows
+
+Every finished run (`complete` or `halted`) shows an **Improve** button in its run header (hidden
+on `self-improve` runs themselves, to avoid recursion). Clicking it reduces the run to a compact
+run-log (manifest + `chats/` transcript, plus per-call token/timing/tool-failure metrics when
+available) and launches the `self-improve` workflow against it: three analysts review failures and
+tool errors, performance bottlenecks and context hotspots, and workflow structure/prompts, then a
+synthesis step drafts two artifacts — `improved-<name>.yaml`, an improved version of the source
+workflow, and `suggestions.md`, a report of everything a YAML edit can't fix plus a changelog.
+Nothing is auto-applied: review the deliverables on the new run and copy the YAML into
+`$ATOM_HOME/workflows/` by hand if you like it.
+
+The feature is itself a workflow, so `workflows/self-improve.yaml` must be installed like any
+other (`cp workflows/self-improve.yaml ~/.atom/workflows/`) — without it the Improve button 503s.
+Per-call token/context/timing detail in the analysis requires observability (LangSmith or LangFuse)
+to have been enabled for the *source* run; if it wasn't, the analysis still runs from the manifest
+and transcript alone, just without those metrics.
+
 ## Observability (LangSmith)
 
 Workflow runs can be traced to [LangSmith](https://smith.langchain.com). Enable it via the
