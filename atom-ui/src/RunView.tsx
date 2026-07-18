@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
-import { api, artifactUrl, exportDownloadUrl, Artifact, ChatMsg, Manifest, StreamBlock } from "./api";
+import { api, artifactUrl, exportDownloadUrl, Artifact, ChatMsg, Manifest, StreamBlock, Todo } from "./api";
+import { currentPlan } from "./plan";
 import { Dot, StatusPill, elapsed, fmtSize } from "./ui";
 
 const IMG = /\.(png|jpe?g|gif|webp|svg|bmp|avif|apng|jfif|ico)$/i;
@@ -338,8 +339,15 @@ function Transcript(
 ) {
   const [chat, setChat] = useState<ChatMsg[]>([]);
   const [pending, setPending] = useState(false);
-  const { blocks, streaming } = useTaskStream(runId, sel, taskStatus);
+  const { blocks, streaming, lastEventAt } = useTaskStream(runId, sel, taskStatus);
   const presented = useMemo(() => presentedSetFor(chat, arts, sel), [chat, arts, sel]);
+  const plan = currentPlan(blocks, chat, streaming);
+  const rail = (plan.length || presented.length) ? (
+    <div className="transcript-rail">
+      {plan.length > 0 && <PlanPanel todos={plan} />}
+      {presented.length > 0 && <PresentedPanel runId={runId} files={presented} onOpen={onOpenArtifact} />}
+    </div>
+  ) : null;
 
   useEffect(() => {
     if (!sel) { setChat([]); return; }
@@ -357,26 +365,30 @@ function Transcript(
   // Live stream takes over while the task runs and has produced something; after `done` flips
   // `streaming` false, keep the live blocks visible until the reconciled chat snapshot loads
   // (avoids a flash of "No messages yet…", and covers failed tasks that have no persisted chat).
-  if (blocks.length && (streaming || !chat.length)) {
+  if (streaming || (blocks.length && !chat.length)) {
     return (
-      <div className="transcript">
-        {blocks.map((b, i) => {
-          const isLast = i === blocks.length - 1;
-          if (b.kind === "thinking")
-            return <div key={i} className="msg thinking"><div className="msg-role">thinking</div>
-              <div className="msg-text think">{b.text}{isLast && <span className="caret" />}</div></div>;
-          if (b.kind === "text")
-            return <div key={i} className="msg ai"><div className="msg-role">assistant</div>
-              <div className="msg-text">{b.text}{isLast && <span className="caret" />}</div></div>;
-          if (b.kind === "tool_call")
-            return <div key={i} className="msg tool-calls">
-              <div className={`toolcall${b.name === "present_files" ? " present" : ""}`}>
-                <span className="tc-name">→ {b.name}</span>
-                <span className="tc-args">{argSummary(b.args)}</span></div></div>;
-          return <div key={i} className={`msg tool${b.isError ? " err" : ""}`}>
-            <div className="msg-role">{b.name || "tool"}</div>
-            <div className="msg-text">{b.text}</div></div>;
-        })}
+      <div className="transcript-split">
+        <div className="transcript">
+          {blocks.map((b, i) => {
+            const isLast = i === blocks.length - 1;
+            if (b.kind === "thinking")
+              return <div key={i} className="msg thinking"><div className="msg-role">thinking</div>
+                <div className="msg-text think">{b.text}{isLast && <span className="caret" />}</div></div>;
+            if (b.kind === "text")
+              return <div key={i} className="msg ai"><div className="msg-role">assistant</div>
+                <div className="msg-text">{b.text}{isLast && <span className="caret" />}</div></div>;
+            if (b.kind === "tool_call")
+              return <div key={i} className="msg tool-calls">
+                <div className={`toolcall${b.name === "present_files" ? " present" : ""}`}>
+                  <span className="tc-name">→ {b.name}</span>
+                  <span className="tc-args">{argSummary(b.args)}</span></div></div>;
+            return <div key={i} className={`msg tool${b.isError ? " err" : ""}`}>
+              <div className="msg-role">{b.name || "tool"}</div>
+              <div className="msg-text">{b.text}</div></div>;
+          })}
+          <GeneratingIndicator streaming={streaming} lastEventAt={lastEventAt} />
+        </div>
+        {rail}
       </div>
     );
   }
@@ -406,8 +418,31 @@ function Transcript(
           </div>
         ))}
       </div>
-      {presented.length > 0 && <PresentedPanel runId={runId} files={presented} onOpen={onOpenArtifact} />}
+      {rail}
     </div>
+  );
+}
+
+const PLAN_GLYPH: Record<Todo["status"], string> = { completed: "✓", in_progress: "▸", pending: "○" };
+
+// Pinned, glanceable view of the agent's current plan (latest write_todos). Read-only.
+function PlanPanel({ todos }: { todos: Todo[] }) {
+  const done = todos.filter((t) => t.status === "completed").length;
+  return (
+    <aside className="plan-panel">
+      <div className="plan-head">
+        <span className="plan-title">Plan</span>
+        <span className="plan-count">{done}/{todos.length} done</span>
+      </div>
+      <ul className="plan-list">
+        {todos.map((t, i) => (
+          <li key={i} className={`plan-item ${t.status}`}>
+            <span className="plan-glyph">{PLAN_GLYPH[t.status] ?? "○"}</span>
+            <span className="plan-text">{t.content}</span>
+          </li>
+        ))}
+      </ul>
+    </aside>
   );
 }
 
