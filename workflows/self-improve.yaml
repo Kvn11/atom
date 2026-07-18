@@ -1,0 +1,102 @@
+# workflows/self-improve.yaml — copy to $ATOM_HOME/workflows/ to enable the Improve button.
+name: self-improve
+description: >
+  Analyze a finished workflow run and produce an improved workflow file plus a
+  suggestions report. Triggered by the "Improve" button on a finished run.
+inputs:
+  - name: run_log
+    type: file
+    required: true
+    description: Compact run-log JSON for the source run (metrics + transcript).
+  - name: target_workflow
+    type: file
+    required: true
+    description: The current YAML of the workflow that produced the source run.
+  - name: workflow_name
+    required: true
+    description: Name of the workflow being improved.
+  - name: source_run_id
+    required: true
+    description: The run_id that was analyzed.
+  - name: run_status
+    required: false
+    description: Final status of the source run (complete or halted).
+steps:
+  - title: Analyze
+    description: Three analysts read the run-log + target workflow and write findings to the workspace.
+    tasks:
+      - id: failures_and_tools
+        prompt: |
+          You are reviewing run {{ source_run_id }} of the "{{ workflow_name }}" workflow
+          (final status: {{ run_status }}).
+
+          Read the compact run-log at {{ run_log }} and the target workflow YAML at
+          {{ target_workflow }}. The run-log has: run/step/task status + errors + durations,
+          a `calls` list (per LLM/tool call: tokens, duration, and tool errors), and a
+          `transcript` (every message once, with tool calls and tool results).
+
+          Write {{ workspace }}/analysis/failures.md covering:
+          - Which tasks failed and the precise reason (quote the manifest `error` and any tool
+            error text from `calls` / `tool`-role transcript messages).
+          - Every failed tool call: the tool name, the error, and the LIKELY cause.
+          - For each issue, tag it [workflow] (fixable by editing the YAML: prompt, step/task
+            layout, model, thinking) or [harness] (a bug, unclear tool description, or verbose
+            tool output that a YAML edit cannot fix).
+          Then call present_files on {{ workspace }}/analysis/failures.md.
+        thinking: medium
+      - id: bottlenecks_and_context
+        prompt: |
+          Read the run-log at {{ run_log }} and the target workflow at {{ target_workflow }}.
+
+          Write {{ workspace }}/analysis/performance.md covering:
+          - Bottlenecks: rank steps/tasks by duration (`duration_s`) and by token use
+            (`tokens.total` and `tokens.prompt`). Call out the slowest and most expensive.
+          - Context hotspots: which steps/tasks/messages were overly context-consuming
+            (large `tokens.prompt`, or transcript entries in meta.truncations). For each, state
+            the root cause and whether it is [workflow]-fixable (e.g. re-reading a huge file every
+            turn, un-summarized fan-in, a task doing too much) or [harness].
+          - If the run-log meta says export_present is false, note that token data was unavailable
+            and reason from durations + transcript only.
+          Then call present_files on {{ workspace }}/analysis/performance.md.
+        thinking: medium
+      - id: structure_and_prompts
+        prompt: |
+          Read the run-log at {{ run_log }} and the target workflow at {{ target_workflow }}.
+
+          Write {{ workspace }}/analysis/structure.md covering:
+          - What went WELL (keep these — do not regress them).
+          - Workflow design: step/task decomposition, missed parallelization (tasks that could
+            run concurrently in one step), model and thinking choices per task, and prompt
+            clarity/ambiguity. Tag each observation [workflow] or [harness].
+          Then call present_files on {{ workspace }}/analysis/structure.md.
+        thinking: medium
+  - title: Improve
+    description: Synthesize the findings into an improved workflow file and a suggestions report.
+    tasks:
+      - id: synthesize
+        prompt: |
+          Read every file in {{ workspace }}/analysis/, the target workflow at
+          {{ target_workflow }}, and the run-log at {{ run_log }}.
+
+          Produce TWO deliverables and present both with present_files.
+
+          1. {{ workspace }}/improved-{{ workflow_name }}.yaml — an improved version of the
+             target workflow that applies the [workflow]-tagged fixes (better step/task
+             decomposition, parallelization, model/thinking choices, clearer prompts, and fixes
+             for context hotspots). Constraints:
+             - It MUST be a valid atom workflow: top-level `name`, optional `description`,
+               `inputs`, `steps`; each step has a `title` and a non-empty `tasks` list; each task
+               has a `prompt` and optional `id`, `model`, `thinking`. Keep the same `inputs` as
+               the target unless a change is clearly justified.
+             - Only use these fields — any other key is silently ignored by the loader, so do not
+               invent new ones.
+             - Preserve what went well. Every change must trace to a finding.
+
+          2. {{ workspace }}/suggestions.md — for the [harness]-tagged issues that a YAML edit
+             cannot fix (unclear tool descriptions, harness bugs, verbose tool output, config or
+             observability gaps). Include:
+             - A short summary: what went well, what went wrong, top bottlenecks, top context hotspots.
+             - A changelog: every change you made to the workflow YAML and the finding that drove it.
+
+          Base everything on run {{ source_run_id }} (status {{ run_status }}).
+        thinking: high
