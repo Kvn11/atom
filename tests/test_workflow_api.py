@@ -28,6 +28,13 @@ async def _client(app):
             yield c
 
 
+@asynccontextmanager
+async def _client_no_worker(app):
+    # Route-only tests: don't drive the lifespan (no queue worker to recover fake runs).
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+        yield c
+
+
 def _seed(home):
     d = home / "workflows"
     d.mkdir(parents=True, exist_ok=True)
@@ -35,6 +42,16 @@ def _seed(home):
         "name: demo\n"
         "inputs:\n  - name: topic\n    required: true\n"
         "steps:\n  - title: Draft\n    tasks:\n      - id: t1\n        prompt: \"write {{ topic }}\"\n"
+    )
+
+
+def _seed_notes_wf(home):
+    d = home / "workflows"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "notewf.yaml").write_text(
+        "name: notewf\ndescription: has notes.\n"
+        "notes:\n  enabled: true\n"
+        "steps:\n  - title: S\n    tasks:\n      - id: t1\n        prompt: \"hi\"\n"
     )
 
 
@@ -561,3 +578,53 @@ async def test_get_run_exposes_cancel_requested_field(base_config, atom_home):
         r = await client.get("/api/runs/rgf")
         assert r.status_code == 200
         assert r.json()["cancel_requested"] is False
+
+
+@pytest.mark.asyncio
+async def test_get_workflows_includes_notes_enabled(base_config, atom_home):
+    _seed_notes_wf(atom_home)
+    app = create_app(base_config, engine=WorkflowEngine(base_config, prepared_provider=_provider))
+    async with _client_no_worker(app) as c:
+        wfs = (await c.get("/api/workflows")).json()
+    nw = next(w for w in wfs if w["name"] == "notewf")
+    assert nw["notes_enabled"] is True
+
+
+@pytest.mark.asyncio
+async def test_delete_workflow_notes_clears_vault(base_config, atom_home):
+    _seed_notes_wf(atom_home)
+    from atom.notes import notes_root
+    root = notes_root(str(atom_home), "notewf")
+    (root / "pages").mkdir(parents=True)
+    app = create_app(base_config, engine=WorkflowEngine(base_config, prepared_provider=_provider))
+    async with _client_no_worker(app) as c:
+        r = await c.delete("/api/workflows/notewf/notes")
+    assert r.status_code == 200
+    assert r.json() == {"workflow": "notewf", "cleared": True}
+    assert not root.exists()
+
+
+@pytest.mark.asyncio
+async def test_delete_workflow_notes_unknown_is_404(base_config, atom_home):
+    app = create_app(base_config, engine=WorkflowEngine(base_config, prepared_provider=_provider))
+    async with _client_no_worker(app) as c:
+        r = await c.delete("/api/workflows/nope/notes")
+    assert r.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_delete_workflow_notes_409_when_active_run(base_config, atom_home):
+    _seed_notes_wf(atom_home)
+    from atom.workflow.run_store import RunManifest, RunStore, StepState, TaskState
+    store = RunStore(str(atom_home))
+    m = RunManifest(
+        run_id="ar1", workflow="notewf", created_at="2026-07-18T00:00:00",
+        workspace_path=str(store.workspace_dir("ar1")),
+        steps=[StepState(index=0, title="S", tasks=[TaskState(id="t1", thread_id="ar1:s0:t1")])],
+    )
+    m.status = "running"
+    store.create(m)
+    app = create_app(base_config, engine=WorkflowEngine(base_config, prepared_provider=_provider))
+    async with _client_no_worker(app) as c:
+        r = await c.delete("/api/workflows/notewf/notes")
+    assert r.status_code == 409
