@@ -79,3 +79,42 @@ def test_progress_resets_the_budget():
     out = _mw(max_nudges=2).after_model(state, runtime=None)
     assert out is not None
     assert out["todo_nudge"] == {"count": 1, "completed": 1}
+
+
+def _build_chain(base_config, atom_home):
+    from atom.agent import _build_middlewares
+    from atom.library import load_library
+    from atom.sandbox.provider import LocalSandboxProvider
+    from tests.conftest import make_prepared
+
+    prepared = make_prepared([])
+    profile = base_config.profile("default")
+    provider = LocalSandboxProvider()
+    library = load_library(str(atom_home))
+    return _build_middlewares(
+        base_config, profile, prepared, provider, str(atom_home), prepared.model, library
+    )
+
+
+def test_nudge_middleware_wired_before_loop_and_clarification(base_config, atom_home):
+    from atom.middleware.clarification import ClarificationMiddleware
+    from atom.middleware.loop_detection import LoopDetectionMiddleware
+    from atom.middleware.todo_continuation import TodoContinuationMiddleware
+
+    chain = _build_chain(base_config, atom_home)
+    types = [type(m).__name__ for m in chain]
+    assert "TodoContinuationMiddleware" in types
+    nudge_i = next(i for i, m in enumerate(chain) if isinstance(m, TodoContinuationMiddleware))
+    loop_i = next(i for i, m in enumerate(chain) if isinstance(m, LoopDetectionMiddleware))
+    clar_i = next(i for i, m in enumerate(chain) if isinstance(m, ClarificationMiddleware))
+    # Registered EARLIER than loop/clarification -> runs LATER on the reverse after_model unwind,
+    # so their jump_to="end" short-circuits before the nudge can fire.
+    assert nudge_i < loop_i < clar_i
+
+
+def test_nudge_middleware_absent_when_disabled(base_config, atom_home):
+    from atom.middleware.todo_continuation import TodoContinuationMiddleware
+
+    base_config.todos.continuation_nudge = False
+    chain = _build_chain(base_config, atom_home)
+    assert not any(isinstance(m, TodoContinuationMiddleware) for m in chain)

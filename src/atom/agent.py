@@ -234,6 +234,7 @@ def _build_middlewares(
     from atom.middleware.subagent import SubagentLimitMiddleware, SubagentMiddleware
     from atom.middleware.thread_data import ThreadDataMiddleware
     from atom.middleware.title import TitleMiddleware
+    from atom.middleware.todo_continuation import TodoContinuationMiddleware
     from atom.middleware.tool_error import ToolErrorHandlingMiddleware
     from atom.middleware.view_image import ViewImageMiddleware
 
@@ -300,8 +301,10 @@ def _build_middlewares(
     if deferred_names:
         # 8. innermost: hide un-promoted tools + block executing them; hash invalidates stale promos.
         chain.append(DeferredToolFilterMiddleware(deferred_names, catalog_hash=library.catalog_hash))
+    chain.append(TodoListMiddleware())                   # planning tool — ALWAYS ON
+    if cfg.todos.continuation_nudge:                     # nudge the agent to finish incomplete todos
+        chain.append(TodoContinuationMiddleware(max_nudges=cfg.todos.max_nudges))
     chain += [
-        TodoListMiddleware(),                            # planning tool — ALWAYS ON
         SubagentMiddleware(runner),                      # delegate_task tool — ALWAYS ON
         # --- wrap_tool_call (outer -> inner) ---
         SandboxAuditMiddleware(),                        # journal every tool call
