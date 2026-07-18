@@ -181,6 +181,39 @@ def test_incomplete_export_flagged(atom_home):
     assert log["meta"]["export_present"] is True and log["meta"]["export_complete"] is False
 
 
+def test_non_dict_export_envelope_is_noted_and_skipped(atom_home):
+    store = _seed_run(atom_home)
+    store.export_path("r1").write_text(json.dumps([1, 2, 3]), encoding="utf-8")
+    log = build_run_log(str(atom_home), "r1")
+    assert log["calls"] == []
+    assert any("unreadable" in n for n in log["meta"]["notes"])
+
+
+def test_one_malformed_root_does_not_discard_other_roots_data(atom_home):
+    store = _seed_run(atom_home)
+    good_root = {  # lead root for step 0 / poet_a — well-formed, with real tokens
+        "extra": {"metadata": {"step_index": 0, "task_id": "poet_a"}},
+        "run_type": "chain", "start_time": "2026-07-18T00:00:00", "end_time": "2026-07-18T00:00:20",
+        "child_runs": [
+            {"run_type": "llm", "name": "haiku", "start_time": "2026-07-18T00:00:01",
+             "end_time": "2026-07-18T00:00:05", "first_token_time": "2026-07-18T00:00:02",
+             "prompt_tokens": 1200, "completion_tokens": 300, "total_tokens": 1500, "error": None},
+        ],
+    }
+    bad_root = {  # malformed: child_runs is a dict, not a list -> shape surprise while walking
+        "extra": {"metadata": {"step_index": 1, "task_id": "refiner"}},
+        "child_runs": {"not": "a list"},
+    }
+    _write_export(store, "r1", "langsmith", [good_root, bad_root])
+    log = build_run_log(str(atom_home), "r1")
+
+    poet = log["steps"][0]["tasks"][0]
+    assert poet["tokens"] == {"prompt": 1200, "completion": 300, "total": 1500}
+    assert poet["llm_calls"] == 1
+
+    assert any("unexpected shape" in n for n in log["meta"]["notes"])
+
+
 def test_langfuse_generation_tokens_and_error(atom_home):
     store = _seed_run(atom_home)
     roots = [{

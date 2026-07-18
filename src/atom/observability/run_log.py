@@ -136,9 +136,11 @@ def _enrich(run_log: dict, store: RunStore, run_id: str) -> None:
     """Roll `export.json` into `run_log` in place; any read/shape surprise degrades, never raises.
 
     A missing export leaves Task 1's shape untouched (`calls == []`, `export_present=False`).
-    Once the export is confirmed present+parsed, a downstream shape surprise (e.g. `roots` holding
-    something other than the expected dicts) still must not turn into a 500 for the caller — it
-    degrades to "no enrichment" with a note instead, per the "never crash on trace data" rule.
+    Once the export is confirmed present+parsed, each root in `roots` is walked independently:
+    a downstream shape surprise on one root (e.g. it isn't a dict, or a child field isn't the
+    expected shape) must not turn into a 500 for the caller, and must not discard metrics already
+    collected from other roots that walked cleanly — it degrades to "skip that root" with a note,
+    per the "never crash on trace data" rule.
     """
     path = store.export_path(run_id)
     if not path.is_file():
@@ -156,10 +158,11 @@ def _enrich(run_log: dict, store: RunStore, run_id: str) -> None:
     run_log["meta"]["export_complete"] = bool(env.get("complete"))
     calls: list = []
     accs: dict = {}
-    try:
-        for root in env.get("roots") or []:
-            if not isinstance(root, dict):
-                continue
+    for root in env.get("roots") or []:
+        if not isinstance(root, dict):
+            run_log["meta"]["notes"].append("export.json root had an unexpected shape; skipped")
+            continue
+        try:
             if provider == "langfuse":
                 _walk_langfuse(root, calls, accs)
             else:
@@ -168,9 +171,9 @@ def _enrich(run_log: dict, store: RunStore, run_id: str) -> None:
                 agent = "subagent" if meta.get("is_subagent") else "lead"
                 acc = accs.setdefault((step, task), _blank_acc())
                 _walk_langsmith(root, step, task, agent, calls, acc)
-    except (AttributeError, TypeError, KeyError):
-        run_log["meta"]["notes"].append("export.json roots had an unexpected shape; enrichment skipped")
-        calls, accs = [], {}
+        except (AttributeError, TypeError):
+            run_log["meta"]["notes"].append("export.json root had an unexpected shape; skipped")
+            continue
     run_log["calls"] = calls
     for step in run_log["steps"]:
         for row in step["tasks"]:
