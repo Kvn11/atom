@@ -21,15 +21,18 @@ from starlette.datastructures import UploadFile
 from atom.api.models import ExportRequest, RunRequest
 from atom.config import load_config
 from atom.config.schema import AtomConfig
+from atom.observability.run_log import build_run_log, run_log_bytes
 from atom.workflow.engine import WorkflowEngine
 from atom.workflow.events import channel_key
-from atom.workflow.schema import MissingInputError, list_workflows, load_workflow
+from atom.workflow.schema import MissingInputError, list_workflows, load_workflow, workflows_dir
 from atom.workflow.uploads import (
     UploadTooLarge, UploadTypeNotAllowed, check_extension, check_size, virtual_upload_path,
 )
 
 # atom-ui/dist lives at repo root: src/atom/api/app.py -> parents[3] == repo root.
 _UI_DIST = Path(__file__).resolve().parents[3] / "atom-ui" / "dist"
+
+SELF_IMPROVE_WORKFLOW = "self-improve"
 
 
 def _now() -> str:
@@ -302,6 +305,71 @@ def create_app(cfg: AtomConfig | None = None, engine: WorkflowEngine | None = No
             path, media_type="application/json",
             headers={"Content-Disposition": _content_disposition(fname)},
         )
+
+    def _ensure_export(run_id: str) -> None:
+        """Generate the run's trace export if it isn't on disk. Best-effort: any failure
+        (no traces, missing keys, backend error) is swallowed — the run-log degrades gracefully."""
+        if store.export_path(run_id).is_file():
+            return
+        provider = cfg.observability.provider
+        if provider is None:
+            provider = "langsmith" if cfg.observability.enabled else "none"
+        try:
+            if provider == "langfuse":
+                from atom.observability import langfuse_export as export_mod
+                from atom.observability.provider import resolve_langfuse_keys
+                public, secret, _ = resolve_langfuse_keys(cfg.observability)
+                if not (public and secret):
+                    return
+                export_mod.export_run(cfg.home, run_id, cfg=cfg)
+            elif provider != "none":
+                from atom.observability import export as export_mod
+                if not cfg.observability.project:
+                    return
+                export_mod.export_run(cfg.home, run_id, project=cfg.observability.project, cfg=cfg)
+        except Exception:  # noqa: BLE001 — export is optional enrichment; never block the trigger
+            pass
+
+    @app.post("/api/runs/{run_id}/self-improve", status_code=202)
+    def self_improve(run_id: str) -> dict:
+        """Analyze a finished run and launch the self-improve workflow on it.
+
+        Reduces the run to a compact run-log, stages it + the target workflow's YAML as file
+        inputs, and enqueues a new `self-improve` run through the ordinary submission path.
+        """
+        try:
+            manifest = store.load(run_id)
+        except FileNotFoundError:
+            raise HTTPException(404, "run not found")
+        if manifest.status not in ("complete", "halted"):
+            raise HTTPException(409, "run is not finished yet")
+        if manifest.workflow == SELF_IMPROVE_WORKFLOW:
+            raise HTTPException(400, "cannot self-improve the self-improvement workflow")
+
+        target_path = workflows_dir(cfg.home) / f"{manifest.workflow}.yaml"
+        if not target_path.is_file():
+            raise HTTPException(404, f"workflow '{manifest.workflow}' no longer exists on disk")
+        target_yaml = target_path.read_bytes()
+
+        try:
+            wf = load_workflow(SELF_IMPROVE_WORKFLOW, cfg.home)
+        except FileNotFoundError:
+            raise HTTPException(503, f"'{SELF_IMPROVE_WORKFLOW}.yaml' is not installed in "
+                                     f"{workflows_dir(cfg.home)} — install it to enable self-improvement")
+
+        _ensure_export(run_id)                      # best-effort; never blocks
+        run_log = build_run_log(cfg.home, run_id)
+
+        inputs = {
+            "workflow_name": manifest.workflow,
+            "source_run_id": run_id,
+            "run_status": manifest.status,
+        }
+        files = {
+            "run_log": ("run_log.json", run_log_bytes(run_log)),
+            "target_workflow": (f"{manifest.workflow}.yaml", target_yaml),
+        }
+        return _create_and_enqueue(wf, inputs, files)
 
     @app.get("/api/runs/{run_id}/artifacts")
     def get_artifacts(run_id: str) -> list:
