@@ -631,3 +631,19 @@ async def test_delete_workflow_notes_409_when_active_run(base_config, atom_home)
         r = await c.delete("/api/workflows/notewf/notes")
     assert r.status_code == 409
     assert notes_root(str(atom_home), "notewf").exists()  # gate ran before any delete
+
+
+@pytest.mark.asyncio
+async def test_delete_workflow_notes_409_when_graph_open(base_config, atom_home, monkeypatch):
+    _seed_notes_wf(atom_home)
+    import atom.notes as notes_mod
+
+    def _busy(*a, **k):
+        raise notes_mod.VaultBusyError("graph 'atom.notewf' is open in the Logseq desktop app")
+
+    monkeypatch.setattr(notes_mod, "clear_vault", _busy)
+    app = create_app(base_config, engine=WorkflowEngine(base_config, prepared_provider=_provider))
+    async with _client_no_worker(app) as c:
+        r = await c.delete("/api/workflows/notewf/notes")
+    assert r.status_code == 409
+    assert "open in the Logseq desktop app" in r.json()["detail"]

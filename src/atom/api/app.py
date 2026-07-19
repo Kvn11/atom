@@ -109,15 +109,24 @@ def create_app(cfg: AtomConfig | None = None, engine: WorkflowEngine | None = No
     @app.delete("/api/workflows/{name}/notes")
     def clear_workflow_notes(name: str) -> dict:
         """Delete a workflow's persistent Logseq vault (re-provisioned on its next run)."""
-        from atom.notes import clear_vault
+        from atom.notes import VaultBusyError, clear_vault
 
         try:
-            load_workflow(name, cfg.home)
+            wf = load_workflow(name, cfg.home)
         except FileNotFoundError:
             raise HTTPException(404, f"workflow '{name}' not found")
         if engine.store.has_active_runs(name):
             raise HTTPException(409, f"workflow '{name}' has an active run; cannot clear notes")
-        return {"workflow": name, "cleared": clear_vault(cfg.home, name)}
+        try:
+            cleared = clear_vault(
+                cfg.home, name,
+                expose_to_logseq=cfg.notes.expose_to_logseq,
+                logseq_root_dir=cfg.notes.logseq_root_dir,
+                graph_override=wf.notes.graph,
+            )
+        except VaultBusyError as exc:
+            raise HTTPException(409, str(exc))
+        return {"workflow": name, "cleared": cleared}
 
     def _create_and_enqueue(wf, inputs: dict, files: dict) -> dict:
         # files: {input_name: (original_filename, data_bytes)}

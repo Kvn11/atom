@@ -180,8 +180,9 @@ def workflow_notes_clear(
     config: str = typer.Option(None, "--config", "-c"),
 ) -> None:
     """Delete a workflow's persistent Logseq vault (a fresh one is provisioned on the next run)."""
-    from atom.notes import clear_vault
+    from atom.notes import VaultBusyError, clear_vault
     from atom.workflow.run_store import RunStore
+    from atom.workflow.schema import load_workflow
 
     cfg = load_config(config)
     if RunStore(cfg.home).has_active_runs(name):
@@ -192,7 +193,22 @@ def workflow_notes_clear(
         raise typer.Exit(1)
     if not yes:
         typer.confirm(f"Delete the persistent Logseq vault for workflow '{name}'?", abort=True)
-    if clear_vault(cfg.home, name):
+    graph_override = None
+    try:
+        graph_override = load_workflow(name, cfg.home).notes.graph
+    except FileNotFoundError:
+        pass
+    try:
+        cleared = clear_vault(
+            cfg.home, name,
+            expose_to_logseq=cfg.notes.expose_to_logseq,
+            logseq_root_dir=cfg.notes.logseq_root_dir,
+            graph_override=graph_override,
+        )
+    except VaultBusyError as exc:
+        console.print(f"[red]Cannot clear notes for '{name}': {exc}[/red]")
+        raise typer.Exit(1)
+    if cleared:
         console.print(f"[green]Cleared notes vault for '{name}'.[/green]")
     else:
         console.print(f"[dim]No notes vault existed for '{name}'.[/dim]")
