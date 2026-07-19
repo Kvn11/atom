@@ -32,7 +32,7 @@ def _extract_rows(payload) -> list:
     """Accept either a raw `logseq query` envelope or a bare list of rows."""
     if isinstance(payload, dict):
         return (payload.get("data") or {}).get("result") or []
-    return payload or []
+    return payload if isinstance(payload, list) else []
 
 
 def _pages_from_rows(rows) -> list[str]:
@@ -79,13 +79,20 @@ def analyze(pages: list[str], edges: list[tuple[str, str]]) -> dict:
     # Every page is a node even with no edges (its own singleton component).
     # Include edge endpoints too, defensively, in case a ref names a page the
     # user-page query filtered out.
-    nodes = sorted({*pages, *(a for a, _ in edges), *(b for _, b in edges)})
+    # Nodes are the curation universe (the caller's pages), NOT edge endpoints.
+    # A page referenced only as a [[link]] target (an empty stub) or a journal
+    # that links out is excluded from `pages` by the curator's query; folding it
+    # in here would inflate note_count and seed islands/main_component with titles
+    # that are not curation targets. Edges to out-of-universe titles are dropped
+    # for connectivity below.
+    node_set = set(pages)
+    nodes = sorted(node_set)
     adjacency: dict[str, set[str]] = {n: set() for n in nodes}
     inbound: dict[str, int] = {n: 0 for n in nodes}
     outbound: dict[str, int] = {n: 0 for n in nodes}
     edge_pairs: set[frozenset[str]] = set()
     for a, b in edges:
-        if a == b:
+        if a == b or a not in node_set or b not in node_set:
             continue
         adjacency[a].add(b)
         adjacency[b].add(a)
@@ -108,8 +115,8 @@ def analyze(pages: list[str], edges: list[tuple[str, str]]) -> dict:
         isolated = [c[0] for c in components if len(c) == 1]
         main_component = {"size": 0, "members": []}
 
-    orphans = sorted(n for n in pages if inbound.get(n, 0) == 0)
-    deadends = sorted(n for n in pages if outbound.get(n, 0) == 0)
+    orphans = sorted({n for n in pages if inbound.get(n, 0) == 0})
+    deadends = sorted({n for n in pages if outbound.get(n, 0) == 0})
 
     return {
         "note_count": note_count,

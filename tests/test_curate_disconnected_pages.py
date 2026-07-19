@@ -56,6 +56,24 @@ def test_analyze_empty_graph():
     assert report["isolated"] == []
 
 
+def test_analyze_ignores_out_of_universe_edge_endpoints():
+    mod = _load()
+    # 'Stub' is referenced by Alpha but is NOT in the pages universe (an empty
+    # stub / journal). It must not appear in the report or inflate note_count;
+    # the direct Alpha<->Beta edge still connects the two real pages.
+    pages = ["Alpha", "Beta"]
+    edges = [("Alpha", "Stub"), ("Stub", "Beta"), ("Alpha", "Beta")]
+    report = mod.analyze(pages, edges)
+    assert report["note_count"] == 2
+    members = list(report["main_component"]["members"]) + list(report["isolated"])
+    for island in report["islands"]:
+        members += island["members"]
+    assert "Stub" not in members
+    assert report["component_count"] == 1
+    assert set(report["main_component"]["members"]) == {"Alpha", "Beta"}
+    assert report["edge_count"] == 1  # only the in-universe Alpha<->Beta edge counts
+
+
 def test_cli_reads_logseq_query_result_shape(tmp_path):
     # Accepts the raw `logseq query --output json` envelope, not just bare lists.
     pages_file = tmp_path / "pages.json"
