@@ -171,6 +171,18 @@ def test_workflow_notes_clear_busy_exits_1(atom_home, tmp_path, monkeypatch):
     assert "open in the Logseq desktop app" in " ".join(result.stdout.split())
 
 
+def test_workflow_notes_clear_tolerates_malformed_workflow_yaml(atom_home, tmp_path):
+    (atom_home / "workflows").mkdir(parents=True, exist_ok=True)
+    (atom_home / "workflows" / "brokenwf.yaml").write_text("name: brokenwf\nsteps: []\n")
+    from atom.notes import notes_root
+    root = notes_root(str(atom_home), "brokenwf")
+    (root / "pages").mkdir(parents=True)
+    result = runner.invoke(
+        app, ["workflow", "notes", "clear", "brokenwf", "--yes", "--config", _isolated_cfg(tmp_path)])
+    assert result.exit_code == 0, result.stdout
+    assert not root.exists()
+
+
 def test_workflow_notes_clear_refuses_when_active_run(atom_home):
     from atom.workflow.run_store import RunManifest, RunStore, StepState, TaskState
     store = RunStore(str(atom_home))

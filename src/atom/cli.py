@@ -196,7 +196,7 @@ def workflow_notes_clear(
     graph_override = None
     try:
         graph_override = load_workflow(name, cfg.home).notes.graph
-    except FileNotFoundError:
+    except Exception:  # noqa: BLE001 — best-effort override lookup; a missing/malformed def must not block cleanup
         pass
     try:
         cleared = clear_vault(
