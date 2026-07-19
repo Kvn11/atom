@@ -321,3 +321,19 @@ def test_child_config_decorated_with_run_level_session():
     assert handler in config["callbacks"]
     assert config["metadata"]["langfuse_session_id"] == "r1"      # run, not parent thread
     assert config["metadata"]["atom_subagent"] is True            # marker preserved
+
+
+def test_child_middleware_includes_size_limit_middlewares(atom_home):
+    from atom.middleware.context_overflow import ContextOverflowMiddleware
+    from atom.middleware.tool_output_cap import ToolOutputCapMiddleware
+    from atom.subagent import SubagentRunner
+
+    runner = SubagentRunner(
+        model=None, home=str(atom_home), context_window=123_456, bash_enabled=False,
+        overflow_max_attempts=2, max_tool_output_chars=777,
+    )
+    mws = runner._child_middleware()
+    overflow = [m for m in mws if isinstance(m, ContextOverflowMiddleware)]
+    cap = [m for m in mws if isinstance(m, ToolOutputCapMiddleware)]
+    assert overflow and overflow[0].context_window == 123_456 and overflow[0].max_attempts == 2
+    assert cap and cap[0].max_chars == 777
