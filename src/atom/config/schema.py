@@ -38,6 +38,11 @@ class CompactionConfig(_Base):
     # How much conversation history the summarizer reads when building a summary
     # (trim_tokens_to_summarize). Higher = richer summaries at more summarizer cost.
     summary_input_tokens: int = 8000
+    # Reactive emergency recovery when a model call overflows the context window (input too big).
+    # When off, the first overflow raises ContextOverflowError immediately (no shrink-and-retry).
+    overflow_recovery: bool = True
+    overflow_max_attempts: int = 3          # shrink-and-retry rounds before failing clean
+    overflow_target_ratio: float = 0.5      # first trim target as a fraction of the context window
 
 
 class SubagentConfig(_Base):
@@ -167,6 +172,9 @@ class ToolsConfig(_Base):
             "present_files", "view_image",
         ]
     )
+    # Cap any single tool result at this many characters before it enters history; the truncation
+    # is marked so the model knows it was cut and can re-run narrower. Generous (~25k tokens).
+    max_output_chars: int = 100_000
 
 
 class SkillsConfig(_Base):
