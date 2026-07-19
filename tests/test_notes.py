@@ -86,3 +86,32 @@ def test_clear_vault_refuses_outside_notes_dir(atom_home, monkeypatch):
     monkeypatch.setattr(notes_mod, "notes_root", lambda home, name: Path(home) / "workflows")
     with pytest.raises(ValueError):
         notes_mod.clear_vault(str(atom_home), "x")
+
+
+def test_atom_graph_name_prefixes_and_slugs():
+    from atom.notes import ATOM_GRAPH_PREFIX, _atom_graph_name
+    assert _atom_graph_name("Research Agent", None) == f"{ATOM_GRAPH_PREFIX}research-agent"
+    assert _atom_graph_name("wf", "My Custom Graph") == f"{ATOM_GRAPH_PREFIX}my-custom-graph"
+    # the name is always namespaced, so it is safe to feed to `graph remove`
+    assert _atom_graph_name("anything", None).startswith(ATOM_GRAPH_PREFIX)
+
+
+def test_resolve_logseq_root_override_wins(tmp_path, monkeypatch):
+    from atom.notes import resolve_logseq_root
+    monkeypatch.delenv("LOGSEQ_GRAPHS_DIR", raising=False)
+    assert resolve_logseq_root(str(tmp_path / "home")) == (tmp_path / "home").resolve()
+
+
+def test_resolve_logseq_root_env_points_at_graphs_dir(tmp_path, monkeypatch):
+    from atom.notes import resolve_logseq_root
+    # $LOGSEQ_GRAPHS_DIR is the graphs/ dir; the CLI root-dir is its parent.
+    monkeypatch.setenv("LOGSEQ_GRAPHS_DIR", str(tmp_path / "gg" / "graphs"))
+    assert resolve_logseq_root(None) == (tmp_path / "gg").resolve()
+
+
+def test_list_graph_names_parses_json_and_tolerates_garbage(tmp_path):
+    from atom.notes import _list_graph_names
+    ok = lambda args: (0, '{"data":{"graphs":["atom.wf","Demo"]}}', "")
+    assert _list_graph_names(ok, tmp_path) == ["atom.wf", "Demo"]
+    garbage = lambda args: (0, "not json", "")
+    assert _list_graph_names(garbage, tmp_path) == []
