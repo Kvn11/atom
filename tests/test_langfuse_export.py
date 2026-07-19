@@ -453,19 +453,17 @@ class _TooLarge(Exception):
                          "80.30mb exceeds limit of 80.00mb")
 
 
-class _ObsPage:
-    def __init__(self, data, next_cursor):
+class _ObsV2Page:
+    def __init__(self, data, cursor):
         self.data = data
-        self.meta = types.SimpleNamespace(next_cursor=next_cursor)
+        self.meta = types.SimpleNamespace(cursor=cursor)
 
 
 class _ResilientAPI:
-    def __init__(self, pages, core_by_id, fail_full, obs_by_trace, fail_core=None):
-        self._pages = pages
-        self._core = core_by_id
-        self._fail_full = fail_full
-        self._fail_core = fail_core or set()
-        self._obs = obs_by_trace
+    def __init__(self, list_pages, fail_get, obs_pages):
+        self._list_pages = list_pages   # pages of trace.list summary items (each carries metadata via _lead)
+        self._fail_get = fail_get        # set of trace ids whose trace.get raises _TooLarge (the 422)
+        self._obs_pages = obs_pages      # trace_id -> list of observation pages (lists of dicts); None -> get_many raises
         self.session_ids = []
 
     class _TraceNS:
@@ -475,64 +473,72 @@ class _ResilientAPI:
         def list(self, session_id, page=1):
             self._o.session_ids.append(session_id)
             idx = page - 1
-            return _Page(self._o._pages[idx] if idx < len(self._o._pages) else [])
+            return _Page(self._o._list_pages[idx] if idx < len(self._o._list_pages) else [])
 
-        def get(self, trace_id, fields=None):
-            if fields == "core":
-                if trace_id in self._o._fail_core:
-                    raise _TooLarge()
-                return self._o._core[trace_id]
-            if trace_id in self._o._fail_full:
+        def get(self, trace_id):                       # real SDK signature: NO fields kwarg
+            if trace_id in self._o._fail_get:
                 raise _TooLarge()
-            return self._o._core[trace_id]
+            raise AssertionError("fast path not expected in these resilient tests")
 
-    class _ObsNS:
+    class _ObsV2NS:
         def __init__(self, o):
             self._o = o
 
-        def get_many(self, *, trace_id, cursor=None, limit=None):
-            pages = self._o._obs.get(trace_id, [[]])
+        def get_many(self, *, trace_id, cursor=None, limit=None, fields=None, **kwargs):
+            if self._o._obs_pages is None:
+                raise RuntimeError("observation pagination unavailable")
+            pages = self._o._obs_pages.get(trace_id, [[]])
             i = cursor or 0
             data = pages[i] if i < len(pages) else []
             nxt = (i + 1) if (i + 1) < len(pages) else None
-            return _ObsPage(data, nxt)
+            return _ObsV2Page(data, nxt)
 
     @property
     def trace(self):
         return _ResilientAPI._TraceNS(self)
 
     @property
-    def observations(self):
-        return _ResilientAPI._ObsNS(self)
+    def observations_v_2(self):
+        return _ResilientAPI._ObsV2NS(self)
 
 
 class _ResilientClient:
-    def __init__(self, pages, core_by_id, fail_full, obs_by_trace, fail_core=None):
-        self.api = _ResilientAPI(pages, core_by_id, fail_full, obs_by_trace, fail_core)
+    def __init__(self, list_pages, fail_get, obs_pages):
+        self.api = _ResilientAPI(list_pages, fail_get, obs_pages)
 
 
 def test_export_paginates_observations_when_trace_get_too_large(atom_home):
-    core = {"L0": _lead("L0", "t0")}                      # carries lead metadata via fields="core"
     obs = {"L0": [[{"id": "o1", "input": "big"}, {"id": "o2", "output": "stuff"}]]}
-    client = _ResilientClient([[_summary("L0")], []], core, {"L0"}, obs)
+    client = _ResilientClient([[_lead("L0", "t0")], []], {"L0"}, obs)
     trees = fetch_session_traces(client, "r1")
     assert len(trees) == 1
     assert trees[0]["id"] == "L0"
-    assert trees[0]["metadata"]["agent_role"] == "lead"                 # metadata preserved
-    assert {o["id"] for o in trees[0]["observations"]} == {"o1", "o2"}   # full data preserved
+    assert trees[0]["metadata"]["agent_role"] == "lead"       # metadata from the list summary, not trace.get
+    assert {o["id"] for o in trees[0]["observations"]} == {"o1", "o2"}   # full observation data preserved
 
 
 def test_export_paginates_across_multiple_pages(atom_home):
-    core = {"L0": _lead("L0", "t0")}
     obs = {"L0": [[{"id": "o1"}], [{"id": "o2"}], []]}   # cursor 0 -> 1 -> stop
-    client = _ResilientClient([[_summary("L0")], []], core, {"L0"}, obs)
+    client = _ResilientClient([[_lead("L0", "t0")], []], {"L0"}, obs)
     trees = fetch_session_traces(client, "r1")
     assert {o["id"] for o in trees[0]["observations"]} == {"o1", "o2"}
 
 
-def test_export_placeholder_when_even_core_fails(atom_home):
-    client = _ResilientClient([[_summary("L0")], []], {}, {"L0"}, {}, fail_core={"L0"})
+def test_export_placeholder_when_pagination_fails(atom_home):
+    client = _ResilientClient([[_lead("L0", "t0")], []], {"L0"}, obs_pages=None)  # get_many raises
     trees = fetch_session_traces(client, "r1")
     assert len(trees) == 1
     assert trees[0]["metadata"].get("atom_export_degraded") == "fetch-failed"
-    assert trees[0]["metadata"].get("is_subagent") is True   # not counted as a lead
+    assert trees[0]["metadata"].get("is_subagent") is True   # unreadable trace not counted as a lead
+
+
+def test_real_langfuse_observations_v2_get_many_signature():
+    import inspect
+    from langfuse import Langfuse
+    client = Langfuse(public_key="pk", secret_key="sk")
+    # the resilient path MUST use the cursor-based v2 endpoint...
+    v2 = inspect.signature(client.api.observations_v_2.get_many).parameters
+    assert "cursor" in v2 and "fields" in v2 and "trace_id" in v2
+    # ...NOT the page-based v1 endpoint (guards against regressing to the wrong resource)
+    v1 = inspect.signature(client.api.observations.get_many).parameters
+    assert "cursor" not in v1
