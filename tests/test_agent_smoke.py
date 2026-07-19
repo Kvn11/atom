@@ -131,3 +131,23 @@ def test_lead_middleware_uses_config_retry_policy(base_config):
     )
     llm_mws = [m for m in chain if isinstance(m, LLMErrorHandlingMiddleware)]
     assert llm_mws and llm_mws[0].policy.max_retries == 7
+
+
+def test_size_limit_middlewares_wired_in_order(base_config, atom_home):
+    from atom.agent import _build_middlewares
+    from atom.library import load_library
+    from atom.sandbox.provider import LocalSandboxProvider
+
+    prepared = make_prepared([])
+    profile = base_config.profile("default")
+    provider = LocalSandboxProvider()
+    library = load_library(str(atom_home))
+    chain = _build_middlewares(
+        base_config, profile, prepared, provider, str(atom_home), prepared.model, library
+    )
+    types = [type(m).__name__ for m in chain]
+    assert "ContextOverflowMiddleware" in types and "ToolOutputCapMiddleware" in types
+    # ContextOverflow is INNER of the retry middleware (later in the list).
+    assert types.index("LLMErrorHandlingMiddleware") < types.index("ContextOverflowMiddleware")
+    # ToolOutputCap is the OUTERMOST tool wrapper (before SandboxAudit).
+    assert types.index("ToolOutputCapMiddleware") < types.index("SandboxAuditMiddleware")

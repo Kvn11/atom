@@ -219,6 +219,7 @@ def _build_middlewares(
     # Local imports keep the ordered list readable and avoid import cycles.
     from atom.middleware.clarification import ClarificationMiddleware
     from atom.middleware.compaction import build_compaction_middleware
+    from atom.middleware.context_overflow import ContextOverflowMiddleware
     from atom.middleware.dangling_tool_call import DanglingToolCallMiddleware
     from atom.middleware.deferred_tools import DeferredToolFilterMiddleware
     from atom.middleware.instruction_pin import InstructionPinMiddleware
@@ -238,6 +239,7 @@ def _build_middlewares(
     from atom.middleware.title import TitleMiddleware
     from atom.middleware.todo_continuation import TodoContinuationMiddleware
     from atom.middleware.tool_error import ToolErrorHandlingMiddleware
+    from atom.middleware.tool_output_cap import ToolOutputCapMiddleware
     from atom.middleware.view_image import ViewImageMiddleware
 
     # The [2,4] clamp (deviation #9) is applied once here and used for both the runner's semaphore
@@ -273,6 +275,10 @@ def _build_middlewares(
         skill_catalog=skill_catalog or [],
         has_skill_library=library.has_skills,
         notes=notes,   # bash children rendered vault-aware when the workflow enables notes
+        overflow_recovery=cfg.compaction.overflow_recovery,
+        overflow_max_attempts=cfg.compaction.overflow_max_attempts,
+        overflow_target_ratio=cfg.compaction.overflow_target_ratio,
+        max_tool_output_chars=profile.tools.max_output_chars,
     )
     deferred_names = library.deferred_tool_names()
 
@@ -303,12 +309,19 @@ def _build_middlewares(
     if deferred_names:
         # 8. innermost: hide un-promoted tools + block executing them; hash invalidates stale promos.
         chain.append(DeferredToolFilterMiddleware(deferred_names, catalog_hash=library.catalog_hash))
+    chain.append(ContextOverflowMiddleware(              # innermost wrap_model_call: emergency trim
+        context_window=prepared.context_window,
+        max_attempts=cfg.compaction.overflow_max_attempts,
+        target_ratio=cfg.compaction.overflow_target_ratio,
+        enabled=cfg.compaction.overflow_recovery,
+    ))
     chain.append(TodoListMiddleware())                   # planning tool — ALWAYS ON
     if cfg.todos.continuation_nudge:                     # nudge the agent to finish incomplete todos
         chain.append(TodoContinuationMiddleware(max_nudges=cfg.todos.max_nudges))
     chain += [
         SubagentMiddleware(runner),                      # delegate_task tool — ALWAYS ON
         # --- wrap_tool_call (outer -> inner) ---
+        ToolOutputCapMiddleware(profile.tools.max_output_chars),  # OUTERMOST: cap before state
         SandboxAuditMiddleware(),                        # journal every tool call
         GuardrailMiddleware(enabled=cfg.guardrails.enabled),  # dormant policy seam (gates bash)
         ToolErrorHandlingMiddleware(),                   # tool exceptions -> error ToolMessages
