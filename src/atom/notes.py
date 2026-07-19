@@ -120,13 +120,46 @@ def ensure_vault(
     return NotesBinding(provider="logseq", root_dir=str(root), graph=graph)
 
 
-def clear_vault(home, workflow_name: str) -> bool:
+def _is_busy(err: str) -> bool:
+    """The `graph remove` failure that means the graph is open in the GUI (db-worker error 97)."""
+    e = (err or "").lower()
+    return "owned by another process" in e or "already locked" in e
+
+
+def clear_vault(
+    home,
+    workflow_name: str,
+    *,
+    expose_to_logseq: bool = False,
+    logseq_root_dir: Optional[str] = None,
+    graph_override: Optional[str] = None,
+    runner: Optional[CLIRunner] = None,
+) -> bool:
     """Delete a workflow's persistent Logseq vault. Idempotent; returns whether one existed.
 
-    Confined to ``$ATOM_HOME/notes/``: refuses to remove that directory itself or any path
-    outside it. A fresh vault is re-provisioned by :func:`ensure_vault` on the next
-    notes-enabled run, so this is a full reset rather than a content wipe.
+    Exposed mode: ``graph remove`` the ``atom.<slug>`` graph from the desktop app's home. The name
+    is always namespaced, so a user's personal graph in the same home is never touched. Raises
+    :class:`VaultBusyError` if the graph is currently open in the GUI (db-worker error 97).
+
+    Isolated mode (default): path-confined ``rmtree`` of ``$ATOM_HOME/notes/<slug>/`` (legacy).
+    A fresh vault is re-provisioned by :func:`ensure_vault` on the next notes-enabled run.
     """
+    if expose_to_logseq:
+        run = runner or _default_runner
+        root = resolve_logseq_root(logseq_root_dir)
+        graph = _atom_graph_name(workflow_name, graph_override)
+        if not graph.startswith(ATOM_GRAPH_PREFIX):   # belt-and-suspenders; _atom_graph_name enforces it
+            raise ValueError(f"refusing to remove non-atom graph '{graph}'")
+        if graph not in _list_graph_names(run, root):
+            return False
+        rc, _out, err = run(["logseq", "graph", "remove", "--graph", graph, "--root-dir", str(root)])
+        if rc != 0:
+            if _is_busy(err):
+                raise VaultBusyError(
+                    f"graph '{graph}' is open in the Logseq desktop app; close it and retry")
+            raise RuntimeError(f"logseq graph remove failed (rc={rc}): {err.strip()}")
+        return True
+
     notes_base = (atom_home(home) / "notes").resolve()
     root = notes_root(home, workflow_name).resolve()
     if root == notes_base or not root.is_relative_to(notes_base):

@@ -165,3 +165,45 @@ def test_ensure_vault_default_is_isolated(atom_home):
     b = ensure_vault(str(atom_home), "wf", cfg, runner=fake_runner)
     assert b.graph == "wf"
     assert b.root_dir == str(atom_home / "notes" / "wf")
+
+
+def test_clear_vault_exposed_removes_namespaced_graph(tmp_path):
+    from atom.notes import clear_vault
+    calls = []
+
+    def fake_runner(args):
+        calls.append(args)
+        if args[1:3] == ["graph", "list"]:
+            return 0, '{"data":{"graphs":["atom.wf","Demo"]}}', ""
+        return 0, "removed", ""
+
+    assert clear_vault("ignored", "wf", expose_to_logseq=True,
+                       logseq_root_dir=str(tmp_path), runner=fake_runner) is True
+    remove = next(a for a in calls if a[1:3] == ["graph", "remove"])
+    assert remove[remove.index("--graph") + 1] == "atom.wf"
+
+
+def test_clear_vault_exposed_absent_is_false_and_never_removes(tmp_path):
+    from atom.notes import clear_vault
+
+    def fake_runner(args):
+        if args[1:3] == ["graph", "list"]:
+            # a personal graph literally named "wf" is present; atom.wf is NOT.
+            return 0, '{"data":{"graphs":["wf","Demo"]}}', ""
+        raise AssertionError("must not `graph remove` when atom.<slug> is absent")
+
+    assert clear_vault("x", "wf", expose_to_logseq=True,
+                       logseq_root_dir=str(tmp_path), runner=fake_runner) is False
+
+
+def test_clear_vault_exposed_busy_raises(tmp_path):
+    from atom.notes import clear_vault, VaultBusyError
+
+    def fake_runner(args):
+        if args[1:3] == ["graph", "list"]:
+            return 0, '{"data":{"graphs":["atom.wf"]}}', ""
+        return 1, "", "server is owned by another process"
+
+    with pytest.raises(VaultBusyError):
+        clear_vault("x", "wf", expose_to_logseq=True,
+                    logseq_root_dir=str(tmp_path), runner=fake_runner)
