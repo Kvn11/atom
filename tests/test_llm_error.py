@@ -61,6 +61,19 @@ def test_retryable_string_markers():
     assert not is_retryable(Exception("invalid api key"))
 
 
+def test_retryable_bare_numeric_status_strings():
+    assert is_retryable(Exception("429 Too Many Requests"))
+    assert is_retryable(Exception("502 Bad Gateway"))
+    assert is_retryable(Exception("HTTP 503"))
+    # a digit-substring inside a larger number must NOT count as a status code
+    assert not is_retryable(Exception("used 250000 tokens"))
+
+
+def test_overflow_and_retryable_stay_disjoint_on_anthropic_token_count():
+    exc = _Anthropic(400, "prompt is too long: 250000 tokens > 200000 maximum")
+    assert is_context_overflow(exc) and not is_retryable(exc)
+
+
 # ---- run_with_retry_sync ------------------------------------------------
 
 def test_sync_success_first_try_no_sleep():

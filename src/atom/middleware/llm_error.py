@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import random
+import re
 import time
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, TypeVar
@@ -27,6 +28,10 @@ _RETRYABLE_MARKERS = (
     "resource_exhausted", "resource exhausted", "internal", "deadline",
     "busy", "quota", "try again",
 )
+
+# Bare numeric HTTP status codes, digit-bounded so a real status (e.g. "502 Bad Gateway")
+# matches but a digit-substring inside a larger number (e.g. "250000 tokens") does not.
+_NUMERIC_STATUS_RE = re.compile(r"(?<!\d)(?:429|500|502|503|504|529)(?!\d)")
 
 
 class ProviderUnavailableError(Exception):
@@ -60,6 +65,8 @@ def is_retryable(exc: Exception) -> bool:
     if isinstance(status, int) and (status == 429 or status >= 500):
         return True
     text = str(exc).lower()
+    if _NUMERIC_STATUS_RE.search(text):
+        return True
     return any(m in text for m in _RETRYABLE_MARKERS)
 
 
