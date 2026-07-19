@@ -150,6 +150,11 @@ class LangfuseConfig(_Base):
     # Bounded at load time: the LangFuse SDK rejects out-of-range values with a ValueError,
     # so validate here to surface a misconfig as a clean ValidationError, not a runtime crash.
     sample_rate: float = Field(default=1.0, ge=0.0, le=1.0)
+    # Truncating mask thresholds (guard LangFuse's 80MB-per-trace read limit). Any observation
+    # string field longer than max_field_chars is truncated; if a single observation still
+    # serializes larger than max_observation_bytes it is replaced with a marker.
+    max_field_chars: int = 100_000
+    max_observation_bytes: int = 2_000_000
 
 
 class ObservabilityConfig(_Base):

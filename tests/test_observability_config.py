@@ -68,3 +68,9 @@ def test_langfuse_sample_rate_is_bounded():
         LangfuseConfig(sample_rate=-0.1)
     assert LangfuseConfig(sample_rate=0.0).sample_rate == 0.0
     assert LangfuseConfig(sample_rate=1.0).sample_rate == 1.0
+
+
+def test_langfuse_mask_size_defaults():
+    lf = LangfuseConfig()
+    assert lf.max_field_chars == 100_000
+    assert lf.max_observation_bytes == 2_000_000
