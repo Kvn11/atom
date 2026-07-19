@@ -47,6 +47,23 @@ class ProviderUnavailableError(Exception):
         )
 
 
+class ContextOverflowError(Exception):
+    """Raised when a model call's input still exceeds the model's context window after emergency
+    compaction. Distinct from ProviderUnavailableError: the provider is healthy — the input is too
+    big — so retrying it unchanged is futile and it must not read as an outage."""
+
+    def __init__(self, *, limit: int, attempts: int, original: Exception):
+        self.limit = limit
+        self.attempts = attempts
+        self.original = original
+        super().__init__(
+            f"context window exceeded: input still over the model's ~{limit}-token limit after "
+            f"{attempts} emergency-compaction attempt(s); reduce input, raise compaction "
+            f"aggressiveness, or use a larger-window model "
+            f"({type(original).__name__}: {original})"
+        )
+
+
 @dataclass(frozen=True)
 class RetryPolicy:
     max_retries: int = 20
@@ -109,6 +126,8 @@ def run_with_retry_sync(
         try:
             return call()
         except Exception as exc:  # noqa: BLE001
+            if isinstance(exc, ContextOverflowError):
+                raise
             if attempt >= policy.max_retries or not is_retryable(exc):
                 raise ProviderUnavailableError(exc, attempt + 1) from exc
             ceiling = _backoff_ceiling(attempt, policy)
@@ -127,6 +146,8 @@ async def run_with_retry_async(
         try:
             return await acall()
         except Exception as exc:  # noqa: BLE001
+            if isinstance(exc, ContextOverflowError):
+                raise
             if attempt >= policy.max_retries or not is_retryable(exc):
                 raise ProviderUnavailableError(exc, attempt + 1) from exc
             ceiling = _backoff_ceiling(attempt, policy)

@@ -7,6 +7,7 @@ import httpx
 import pytest
 
 from atom.middleware.llm_error import (
+    ContextOverflowError,
     LLMErrorHandlingMiddleware,
     ProviderUnavailableError,
     RetryingModel,
@@ -256,3 +257,23 @@ def test_overflow_false_for_transient_and_unrelated():
     assert not is_context_overflow(_Gemini(503, "UNAVAILABLE"))
     assert not is_context_overflow(_Anthropic(400, "invalid api key"))
     assert not is_context_overflow(_Anthropic(400, "bad request"))
+
+
+# ---- ContextOverflowError --------------------------------------------------
+
+def test_context_overflow_error_passes_through_sync_retry_core():
+    def raises():
+        raise ContextOverflowError(limit=1000, attempts=3, original=ValueError("too big"))
+    with pytest.raises(ContextOverflowError) as ei:
+        run_with_retry_sync(raises, RetryPolicy(max_retries=5), sleep=lambda d: None)
+    assert ei.value.limit == 1000 and ei.value.attempts == 3
+
+
+async def test_context_overflow_error_passes_through_async_retry_core():
+    async def raises():
+        raise ContextOverflowError(limit=42, attempts=1, original=ValueError("x"))
+
+    async def fake_sleep(d):
+        return None
+    with pytest.raises(ContextOverflowError):
+        await run_with_retry_async(raises, RetryPolicy(max_retries=5), sleep=fake_sleep)
