@@ -135,7 +135,7 @@ A claim in group A that directly conflicts with a claim in group B (same entity,
 A claim in a digest that cites NO evidence (ambiguous/unverified), or that cites evidence a more-recent page supersedes (stale per `:block/updated-at` or log timestamps in the digest) → candidate stale or ambiguous claim. Record: the page, the claim text, and the reason (no cited evidence, or specifically-named newer page that supersedes it).
 
 **Island reconnection.**
-For each disconnected island identified in Sense, dispatch one `vault-reconciler` sub-agent per island (see §11). The reconciler proposes reconnection links; it never writes. Collect its structured proposals.
+For each disconnected island identified in Sense, dispatch one `general-purpose` sub-agent per island, acting as island reconciler (see §11). The reconciler proposes reconnection links; it never writes. Collect its structured proposals.
 
 Contradictions and stale/ambiguous claims identified here are **candidates only** — they must be verified in Stage 5 before any annotation is written.
 
@@ -356,23 +356,25 @@ flagging a claim). Nothing else.
 
 ---
 
-### Island Reconnect (vault-reconciler sub-agent)
+### Island Reconnect (general-purpose sub-agent acting as island reconciler)
 
 ```python
 task(
-    subagent_type="vault-reconciler",
+    subagent_type="general-purpose",
     prompt=(
-        "graph=<NAME> [root_dir=<PATH>]. Island members: <comma-separated list of page titles>. "
+        "graph=<NAME> [root_dir=<PATH>]. You are acting as island reconciler for this graph. "
+        "Island members: <comma-separated list of page titles>. "
         "Read each page via `logseq show --graph <NAME> [--root-dir <PATH>] --page \"<Page>\" "
-        "--linked-references true`. Reconnect this island per your instructions and return your "
-        "structured proposal. Do not write anything to the graph — return proposals only."
+        "--linked-references true`. Propose earned reconnection links from this island to the "
+        "main connected component (or to another island, where genuinely justified) — each "
+        "proposal must be a real, justifiable relationship expressible in one sentence, not a "
+        "surface keyword match. Return each proposal as: source page, target page, one-sentence "
+        "justification. Do not write anything to the graph — return proposals only."
     )
 )
 ```
 
-The `vault-reconciler` returns a structured proposal (earned link candidates with justifications). The lead reviews each proposal; only confirmed earned links are applied in Stage 6.
-
-If atom does not register a `vault-reconciler` sub-agent type, dispatch a `general-purpose` worker with the same read-only proposal contract instead (this is resolved in Task 4).
+This worker (acting as vault-reconciler) returns a structured proposal (earned link candidates with justifications). The lead reviews each proposal; only confirmed earned links are applied in Stage 6.
 
 ---
 
