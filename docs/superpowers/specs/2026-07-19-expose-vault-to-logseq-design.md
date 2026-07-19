@@ -259,3 +259,29 @@ listed by `graph list --root-dir <home>`.
    isolated vaults are disposable test graphs, orphaned in place.
 3. **Scope/opt-out:** **Default-on + global `expose_to_logseq` switch** — matches the "always
    present" intent while staying escapable for headless/remote/privacy deployments.
+
+## Spike results (2026-07-19, live GUI, Logseq 2.0.1)
+
+Ran the deferred Validation Step 1 with Kevin against the real desktop app. **All four assumptions
+validated; no code changes required.**
+
+1. **`~/logseq` is the app's graph home.** The GUI switcher showed the same graphs as
+   `logseq graph list --root-dir ~/logseq` (Demo / notes-smoke / smoke-test). Default resolution is
+   correct.
+2. **`.` renders + is CLI/FS-safe.** `graph create --graph atom.spike` produced `graph-name` and
+   `graph-dir` both literally `atom.spike` (no encoding/traversal), and it rendered cleanly as
+   `atom.spike` in the switcher. `ATOM_GRAPH_PREFIX = "atom."` stands (no fallback to `atom-`).
+3. **Appears in the switcher; concurrent write is safe + live.** With `atom.spike` open in the GUI,
+   `server list` showed **one** db-worker with `owner-source: electron`; a CLI `upsert page` returned
+   `status: ok` and the new page appeared **live** in the open GUI — confirming the CLI reused the
+   GUI's single worker (no dual-writer).
+4. **error-97 string confirmed — `_is_busy` is correct as written.** A `graph remove` against the
+   GUI-open graph returned exit 1 with stderr `Error (server-owned-by-other): server is owned by
+   another process` (JSON: `code: "server-owned-by-other"`). That contains `"owned by another
+   process"`, which `_is_busy` already matches → busy correctly maps to `VaultBusyError` →
+   CLI exit 1 / API 409. After switching the GUI to another graph, `graph remove` succeeded (exit 0),
+   confirming the non-open clear path too.
+
+**Deferred follow-up (optional hardening, not blocking):** key `_is_busy` on the stable error *code*
+`server-owned-by-other` in addition to the prose message, so future wording changes can't regress the
+busy detection. Left as-is for now since the current match is confirmed against 2.0.1.
