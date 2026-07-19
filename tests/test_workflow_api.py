@@ -647,3 +647,19 @@ async def test_delete_workflow_notes_409_when_graph_open(base_config, atom_home,
         r = await c.delete("/api/workflows/notewf/notes")
     assert r.status_code == 409
     assert "open in the Logseq desktop app" in r.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_delete_workflow_notes_tolerates_malformed_workflow_yaml(base_config, atom_home):
+    d = atom_home / "workflows"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "brokenwf.yaml").write_text("name: brokenwf\nsteps: []\n")   # present but fails validation
+    from atom.notes import notes_root
+    root = notes_root(str(atom_home), "brokenwf")
+    (root / "pages").mkdir(parents=True)
+    app = create_app(base_config, engine=WorkflowEngine(base_config, prepared_provider=_provider))
+    async with _client_no_worker(app) as c:
+        r = await c.delete("/api/workflows/brokenwf/notes")
+    assert r.status_code == 200
+    assert r.json() == {"workflow": "brokenwf", "cleared": True}
+    assert not root.exists()

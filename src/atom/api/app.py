@@ -112,9 +112,11 @@ def create_app(cfg: AtomConfig | None = None, engine: WorkflowEngine | None = No
         from atom.notes import VaultBusyError, clear_vault
 
         try:
-            wf = load_workflow(name, cfg.home)
+            graph_override = load_workflow(name, cfg.home).notes.graph
         except FileNotFoundError:
             raise HTTPException(404, f"workflow '{name}' not found")
+        except Exception:  # noqa: BLE001 — a malformed-but-present def must not block clearing (parity with the CLI)
+            graph_override = None
         if engine.store.has_active_runs(name):
             raise HTTPException(409, f"workflow '{name}' has an active run; cannot clear notes")
         try:
@@ -122,7 +124,7 @@ def create_app(cfg: AtomConfig | None = None, engine: WorkflowEngine | None = No
                 cfg.home, name,
                 expose_to_logseq=cfg.notes.expose_to_logseq,
                 logseq_root_dir=cfg.notes.logseq_root_dir,
-                graph_override=wf.notes.graph,
+                graph_override=graph_override,
             )
         except VaultBusyError as exc:
             raise HTTPException(409, str(exc))

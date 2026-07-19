@@ -148,6 +148,9 @@ def clear_vault(
         run = runner or _default_runner
         root = resolve_logseq_root(logseq_root_dir)
         graph = _atom_graph_name(workflow_name, graph_override)
+        # Keyed on the current graph NAME: if a workflow's notes.graph override changed since the
+        # vault was provisioned, a stale-named vault would be left untouched (rare). Isolated mode
+        # is name-agnostic (removes the whole notes/<slug> dir).
         if not graph.startswith(ATOM_GRAPH_PREFIX):   # belt-and-suspenders; _atom_graph_name enforces it
             raise ValueError(f"refusing to remove non-atom graph '{graph}'")
         if graph not in _list_graph_names(run, root):

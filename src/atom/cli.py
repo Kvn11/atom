@@ -208,6 +208,9 @@ def workflow_notes_clear(
     except VaultBusyError as exc:
         console.print(f"[red]Cannot clear notes for '{name}': {exc}[/red]")
         raise typer.Exit(1)
+    except RuntimeError as exc:
+        console.print(f"[red]Failed to clear notes for '{name}': {exc}[/red]")
+        raise typer.Exit(1)
     if cleared:
         console.print(f"[green]Cleared notes vault for '{name}'.[/green]")
     else:

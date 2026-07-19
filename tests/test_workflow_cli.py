@@ -171,6 +171,21 @@ def test_workflow_notes_clear_busy_exits_1(atom_home, tmp_path, monkeypatch):
     assert "open in the Logseq desktop app" in " ".join(result.stdout.split())
 
 
+def test_workflow_notes_clear_generic_runtime_error_exits_1_cleanly(atom_home, tmp_path, monkeypatch):
+    import atom.notes as notes_mod
+
+    def _boom(*a, **k):
+        raise RuntimeError("logseq graph remove failed (rc=1): boom")
+
+    monkeypatch.setattr(notes_mod, "clear_vault", _boom)
+    result = runner.invoke(
+        app, ["workflow", "notes", "clear", "demo", "--yes", "--config", _isolated_cfg(tmp_path)])
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)     # clean exit, not a bare RuntimeError traceback
+    # Collapse Rich's console-width-dependent line wrapping before the substring check.
+    assert "Failed to clear notes" in " ".join(result.stdout.split())
+
+
 def test_workflow_notes_clear_tolerates_malformed_workflow_yaml(atom_home, tmp_path):
     (atom_home / "workflows").mkdir(parents=True, exist_ok=True)
     (atom_home / "workflows" / "brokenwf.yaml").write_text("name: brokenwf\nsteps: []\n")
