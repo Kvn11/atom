@@ -91,3 +91,74 @@ def trim_messages_to_budget(messages: list, approx_budget: int, *, single_msg_ma
     # this concatenation would reorder — revisit here.
     result = protected + kept
     return [_truncate_message(m, approx_budget, single_msg_marker) for m in result]
+
+
+class ContextOverflowMiddleware(AgentMiddleware):
+    """Innermost wrap_model_call: on a context-overflow provider error, deterministically shrink the
+    request and retry — halving the budget each round — then raise ContextOverflowError. It handles
+    ONLY overflow (re-raises anything else), leaving transient retry to LLMErrorHandlingMiddleware,
+    which wraps it."""
+
+    _TRIM_MARKER = (
+        "\n\n[atom: context-overflow emergency trim — {elided} of {total} chars elided from this "
+        "message to fit the model's context window]\n\n"
+    )
+
+    def __init__(self, *, context_window: int, max_attempts: int = 3,
+                 target_ratio: float = 0.5, enabled: bool = True):
+        super().__init__()
+        self.context_window = context_window
+        self.max_attempts = max_attempts
+        self.target_ratio = target_ratio
+        self.enabled = enabled
+
+    def _budget(self, attempt: int) -> int:
+        return max(1, int(self.context_window * self.target_ratio / (2 ** attempt)))
+
+    def _trim(self, request: Any, attempt: int) -> Any:
+        trimmed = trim_messages_to_budget(
+            request.messages, self._budget(attempt), single_msg_marker=self._TRIM_MARKER
+        )
+        return request.override(messages=trimmed)
+
+    def wrap_model_call(self, request: Any, handler: Callable[[Any], Any]) -> Any:
+        try:
+            return handler(request)
+        except Exception as exc:  # noqa: BLE001
+            if not is_context_overflow(exc):
+                raise
+            if not self.enabled:
+                raise ContextOverflowError(limit=self.context_window, attempts=0, original=exc)
+            last = exc
+            for attempt in range(self.max_attempts):
+                try:
+                    return handler(self._trim(request, attempt))
+                except Exception as e2:  # noqa: BLE001
+                    if not is_context_overflow(e2):
+                        raise
+                    last = e2
+            raise ContextOverflowError(
+                limit=self.context_window, attempts=self.max_attempts, original=last
+            )
+
+    async def awrap_model_call(
+        self, request: Any, handler: Callable[[Any], Awaitable[Any]]
+    ) -> Any:
+        try:
+            return await handler(request)
+        except Exception as exc:  # noqa: BLE001
+            if not is_context_overflow(exc):
+                raise
+            if not self.enabled:
+                raise ContextOverflowError(limit=self.context_window, attempts=0, original=exc)
+            last = exc
+            for attempt in range(self.max_attempts):
+                try:
+                    return await handler(self._trim(request, attempt))
+                except Exception as e2:  # noqa: BLE001
+                    if not is_context_overflow(e2):
+                        raise
+                    last = e2
+            raise ContextOverflowError(
+                limit=self.context_window, attempts=self.max_attempts, original=last
+            )
