@@ -141,7 +141,10 @@ table.runs tbody tr:last-child td { border-bottom: 0; }
 .art-name { font-weight: 540; overflow-wrap: anywhere; }
 .art-meta { font-size: 11.5px; color: var(--ink-3); }
 
-.center { min-width: 0; display: flex; flex-direction: column; }
+/* min-height:0 is load-bearing: as a grid item its default min-height:auto is the (tall) min-content
+   height, which would force the run-body grid row past the fixed-height island and scroll the whole
+   page. Zeroing it lets the row clamp to the island so .transcript scrolls internally instead. */
+.center { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .tabbar { display: flex; gap: 2px; padding: 10px 16px 0; border-bottom: 1px solid var(--border); background: var(--surface); }
 .tabbar button { border: 0; background: transparent; color: var(--ink-2); padding: 8px 12px; border-bottom: 2px solid transparent; font-weight: 550; margin-bottom: -1px; }
 .tabbar button:hover { color: var(--ink); }
@@ -187,8 +190,11 @@ table.runs tbody tr:last-child td { border-bottom: 0; }
 .transcript-rail { flex: 0 1 clamp(300px, 40%, 520px); min-width: 0; min-height: 0; display: flex; flex-direction: column;
   border-left: 1px solid var(--border); background: var(--surface); overflow: hidden; }
 .transcript-rail .present-panel { flex: 1; min-height: 0; border-left: 0; }
-.plan-panel { flex: 0 1 auto; max-height: 48%; display: flex; flex-direction: column; overflow: hidden;
+.plan-panel { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; overflow: hidden;
   border-bottom: 1px solid var(--border); }
+/* Cap the plan to the upper portion ONLY when presented files share the rail (so files keep room);
+   when the plan is the rail's only panel it fills — and scrolls within — the whole column. */
+.plan-panel:has(~ .present-panel) { flex: 0 1 auto; max-height: 48%; }
 .plan-head { display: flex; align-items: baseline; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--border); }
 .plan-title { font-weight: 600; font-size: 13px; }
 .plan-count { font-size: 11px; color: #fff; background: var(--accent); border-radius: 999px; padding: 1px 7px; font-weight: 650; }
