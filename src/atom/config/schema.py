@@ -121,6 +121,20 @@ class TodosConfig(_Base):
     max_nudges: int = 2
 
 
+class NotesRuntimeConfig(_Base):
+    # Surface each workflow's Logseq vault directly in the desktop app's graph home so it appears
+    # in the graph switcher with no manual export. When True, a workflow's vault is provisioned as
+    # `atom.<slug>` under `logseq_root_dir` (the app's home). When False, the vault stays isolated
+    # at $ATOM_HOME/notes/<slug>/ (invisible to the GUI) — the legacy behavior. The Pydantic
+    # default is False so programmatic/embedded configs stay isolated; the shipped config.yaml
+    # turns it on for the normal desktop deployment.
+    expose_to_logseq: bool = False
+    # The desktop app's graph home (the --root-dir whose graphs/ the app scans). None ->
+    # $LOGSEQ_GRAPHS_DIR's parent, else ~/logseq. Must equal the app's actual home, or the
+    # shared-db-worker safety is bypassed. Set this only if the app uses a non-default home.
+    logseq_root_dir: Optional[str] = None
+
+
 class LangfuseConfig(_Base):
     # LangFuse tracing backend. Keys fall back to LANGFUSE_* env vars when unset.
     host: Optional[str] = None            # default https://cloud.langfuse.com (SDK default)
@@ -195,6 +209,7 @@ class AtomConfig(_Base):
     retry: RetryConfig = Field(default_factory=RetryConfig)
     guardrails: GuardrailConfig = Field(default_factory=GuardrailConfig)
     todos: TodosConfig = Field(default_factory=TodosConfig)
+    notes: NotesRuntimeConfig = Field(default_factory=NotesRuntimeConfig)
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
     track_usage: bool = True
     agents: dict[str, AgentProfile] = Field(default_factory=lambda: {"default": AgentProfile()})
