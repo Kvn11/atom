@@ -64,7 +64,12 @@ def test_trim_repairs_orphaned_tool_message_end_to_end():
 
 import pytest
 from atom.middleware.context_overflow import ContextOverflowMiddleware
-from atom.middleware.llm_error import ContextOverflowError
+from atom.middleware.llm_error import (
+    ContextOverflowError,
+    LLMErrorHandlingMiddleware,
+    ProviderUnavailableError,
+    RetryPolicy,
+)
 
 _OVERFLOW = "the input token count exceeds the maximum number of tokens allowed"
 
@@ -136,3 +141,37 @@ async def test_async_recovers_after_trim():
     mw = ContextOverflowMiddleware(context_window=1000, max_attempts=3)
     out = await mw.awrap_model_call(_Req([HumanMessage(content="x" * 8000)]), handler)
     assert out == "AOK" and calls["n"] == 2
+
+
+@pytest.mark.asyncio
+async def test_overflow_surfaces_as_context_overflow_through_retry_stack():
+    """ContextOverflow is inner, LLMErrorHandling outer. A persistent overflow must surface as
+    ContextOverflowError (accurate), never ProviderUnavailableError ('provider unavailable')."""
+    overflow_mw = ContextOverflowMiddleware(context_window=1000, max_attempts=2)
+    retry_mw = LLMErrorHandlingMiddleware(RetryPolicy(max_retries=5, base_delay=0.0, max_delay=0.0))
+
+    async def model(req):
+        raise Exception("prompt is too long: too many tokens for the context window")
+
+    async def inner(req):                 # ContextOverflow wraps the model
+        return await overflow_mw.awrap_model_call(req, model)
+
+    with pytest.raises(ContextOverflowError):
+        await retry_mw.awrap_model_call(_Req([HumanMessage(content="x" * 8000)]), inner)
+
+
+@pytest.mark.asyncio
+async def test_transient_still_surfaces_as_provider_unavailable():
+    """Regression: a transient error inside the same stack must still be retried then raised as
+    ProviderUnavailableError (ContextOverflow must pass non-overflow errors straight through)."""
+    overflow_mw = ContextOverflowMiddleware(context_window=1000, max_attempts=2)
+    retry_mw = LLMErrorHandlingMiddleware(RetryPolicy(max_retries=2, base_delay=0.0, max_delay=0.0))
+
+    async def model(req):
+        raise Exception("503 UNAVAILABLE")
+
+    async def inner(req):
+        return await overflow_mw.awrap_model_call(req, model)
+
+    with pytest.raises(ProviderUnavailableError):
+        await retry_mw.awrap_model_call(_Req([HumanMessage(content="hi")]), inner)
