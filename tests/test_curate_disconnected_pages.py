@@ -46,6 +46,20 @@ def test_analyze_orphans_and_deadends_are_directed():
     assert report["deadends"] == ["Lonely"]
 
 
+def test_orphan_and_deadend_differ_on_a_directed_path():
+    mod = _load()
+    # A -> B -> C: A has no inbound (orphan, not dead-end); C has no outbound
+    # (dead-end, not orphan); B is neither. An undirected degree rule would
+    # wrongly report neither A nor C, so this locks in directedness.
+    pages = ["A", "B", "C"]
+    edges = [("A", "B"), ("B", "C")]
+    report = mod.analyze(pages, edges)
+    assert report["orphans"] == ["A"]
+    assert report["deadends"] == ["C"]
+    assert report["component_count"] == 1
+    assert set(report["main_component"]["members"]) == {"A", "B", "C"}
+
+
 def test_analyze_empty_graph():
     mod = _load()
     report = mod.analyze([], [])

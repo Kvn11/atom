@@ -168,7 +168,7 @@ You are the only agent that writes to the graph. Workers propose; you apply.
 | Edit | Apply when |
 |---|---|
 | Earned wikilink | Verify worker confirmed it is a real, justified relationship; apply by adding `[[Target]]` into the relevant block via `logseq upsert block` |
-| Island reconnection | vault-reconciler proposed it and a verify worker confirmed at least one earned link to the main graph |
+| Island reconnection | island-reconciler proposed it and a verify worker confirmed at least one earned link to the main graph |
 | Genuine same-subject merge | Two pages clearly describe the same entity; content is complementary; no substantive information loss — this is your direct judgment from the digests; no separate verify worker is required |
 | Monolithic-page split | A single page covers multiple clearly distinct subjects; split improves navigability — this is your direct judgment from the digests; no separate verify worker is required |
 
@@ -199,14 +199,17 @@ logseq upsert block --graph <NAME> [--root-dir <PATH>] --target-page "<HostPage>
 
 The `--content` names the other page in **plain text** (e.g. `page Beta`), never as a `[[wikilink]]`. The machine-readable link stays in the `curator-conflicts-with` property.
 
-> **⚠️ Never put a `[[wikilink]]` to the conflicting/superseding page inside a flag block's `--content`.**
+> **⚠️ A flag block's `--content` must contain NO `[[wikilinks]]` at all — none.**
 > When `upsert block` carries `--update-tags`/`--update-properties`, the CLI stamps the `#curator`
 > tag AND every `curator-*` property onto **every page the content `[[references]]`** — polluting
 > that page. The residue survives `remove block` and is invisible to the flag-enumeration query,
-> breaking convergence and the single-writer/no-pollution invariant. Name the other page in **plain
-> text** in the content and record it in the `curator-conflicts-with` property. (Earned-wikilink edits
-> are unaffected: they edit a normal block's content **without** `--update-tags`/`--update-properties`,
-> so `[[links]]` there are fine.)
+> breaking convergence and the single-writer/no-pollution invariant. This applies not just to the
+> conflicting/superseding page — it applies to **any** `[[link]]` anywhere in the content, including
+> one embedded inside the quoted claim snippet (`claim "X"`). Name the other page in **plain text**
+> in the content and record it in the `curator-conflicts-with` property. If the claim you are quoting
+> itself contains `[[links]]`, render it as **plain text** — strip the `[[ ]]` brackets — before
+> putting it in the flag content. (Earned-wikilink edits are unaffected: they edit a normal block's
+> content **without** `--update-tags`/`--update-properties`, so `[[links]]` there are fine.)
 
 Then record the annotation for your report.
 
@@ -222,6 +225,9 @@ Then record the annotation for your report.
 ## § 9 — Annotation format & idempotency
 
 Write in-graph knowledge-caveat annotations as a **block tagged `#curator`** with the `curator-*` properties set. Use this exact content + property mapping per flag type.
+
+> When quoting `claim "X"` in any of the three templates below, strip any `[[ ]]` brackets from the
+> quote first — the entire flag content must be wikilink-free (see §8's warning).
 
 **Contradiction** — attach to the offending block; set `curator-conflicts-with` to the other page:
 
@@ -269,7 +275,7 @@ logseq upsert block --graph <NAME> [--root-dir <PATH>] --target-page "<HostPage>
    ```
 4. If no matching flag exists: write the new annotation.
 
-> **⚠ Never hardcode `:user.property/*` or `:user.class/*` db/idents in any query.**
+> **⚠️ Never hardcode `:user.property/*` or `:user.class/*` db/idents in any query.**
 > Logseq mints those idents with a **random per-graph suffix**, so a literal like
 > `:user.property/curator-type` matches nothing in another graph. The enumeration query above
 > keys off the tag's `:block/name "curator"` (via `:block/tags`) instead — portable across
@@ -289,7 +295,7 @@ This annotation is **knowledge**, not a log. It is the one thing the curator wri
 1. **Edits applied** — total count, broken down by type (earned wikilinks, island reconnections, merges, splits), with 3–5 representative samples showing before/after.
 2. **Contradictions flagged** — list each: Page A ("claim X") ↔ Page B ("¬X"), with evidence citations from both sides.
 3. **Stale / ambiguous claims flagged** — list each: page, claim, reason flagged.
-4. **Genuinely unrelated islands** — islands where `vault-reconciler` found no earned reconnection path. List island members.
+4. **Genuinely unrelated islands** — islands where `island-reconciler` found no earned reconnection path. List island members.
 5. **Candidate concept pages** — entities recurring across 3+ groups with no canonical page.
 6. **Possible deletions** — pages that appear to be obsolete, superseded, or empty; not auto-deleted.
 7. **Skip / coverage log** — what was out of scope for this pass (pages outside the `since` window, journal pages excluded by default, groups not re-digested due to size bounds, groups skipped by error) and why. No silent truncation: every out-of-scope page is named or its exclusion criterion is stated.
@@ -307,7 +313,7 @@ State the stopping reason in your report.
 
 ## § 11 — Worker prompt templates
 
-Use these copy-paste templates. Replace `<NAME>` with the actual graph name (and `<PATH>` with `root_dir` when given) and fill in the bracketed fields. Include `graph=<NAME>` in every worker prompt.
+Use these copy-paste templates. Replace `<NAME>` with the actual graph name (and `<PATH>` with `root_dir` when given) and fill in the bracketed fields. Include `graph=<NAME> [root_dir=<PATH>]` in every worker prompt.
 
 ---
 
@@ -383,7 +389,7 @@ task(
 )
 ```
 
-This worker (acting as vault-reconciler) returns a structured proposal (earned link candidates with justifications). The lead reviews each proposal; only confirmed earned links are applied in Stage 6.
+This worker (acting as island-reconciler) returns a structured proposal (earned link candidates with justifications). The lead reviews each proposal; only confirmed earned links are applied in Stage 6.
 
 ---
 
