@@ -133,20 +133,69 @@ def test_workflow_run_malformed_file_token_errors(atom_home):
     assert "NAME=PATH" in result.stdout or "=" in result.stdout
 
 
-def test_workflow_notes_clear_removes_vault(atom_home):
+def _isolated_cfg(tmp_path):
+    p = tmp_path / "cfg.yaml"
+    p.write_text("notes:\n  expose_to_logseq: false\n")
+    return str(p)
+
+
+def test_workflow_notes_clear_removes_vault(atom_home, tmp_path):
     from atom.notes import notes_root
     root = notes_root(str(atom_home), "demo")
     (root / "pages").mkdir(parents=True)
-    result = runner.invoke(app, ["workflow", "notes", "clear", "demo", "--yes"])
+    result = runner.invoke(
+        app, ["workflow", "notes", "clear", "demo", "--yes", "--config", _isolated_cfg(tmp_path)])
     assert result.exit_code == 0
     assert not root.exists()
     assert "Cleared" in result.stdout
 
 
-def test_workflow_notes_clear_noop_when_absent(atom_home):
-    result = runner.invoke(app, ["workflow", "notes", "clear", "ghost", "--yes"])
+def test_workflow_notes_clear_noop_when_absent(atom_home, tmp_path):
+    result = runner.invoke(
+        app, ["workflow", "notes", "clear", "ghost", "--yes", "--config", _isolated_cfg(tmp_path)])
     assert result.exit_code == 0
     assert "No notes vault" in result.stdout
+
+
+def test_workflow_notes_clear_busy_exits_1(atom_home, tmp_path, monkeypatch):
+    import atom.notes as notes_mod
+
+    def _busy(*a, **k):
+        raise notes_mod.VaultBusyError("graph 'atom.demo' is open in the Logseq desktop app")
+
+    monkeypatch.setattr(notes_mod, "clear_vault", _busy)
+    result = runner.invoke(
+        app, ["workflow", "notes", "clear", "demo", "--yes", "--config", _isolated_cfg(tmp_path)])
+    assert result.exit_code == 1
+    # Collapse Rich's console-width-dependent line wrapping before the substring check.
+    assert "open in the Logseq desktop app" in " ".join(result.stdout.split())
+
+
+def test_workflow_notes_clear_generic_runtime_error_exits_1_cleanly(atom_home, tmp_path, monkeypatch):
+    import atom.notes as notes_mod
+
+    def _boom(*a, **k):
+        raise RuntimeError("logseq graph remove failed (rc=1): boom")
+
+    monkeypatch.setattr(notes_mod, "clear_vault", _boom)
+    result = runner.invoke(
+        app, ["workflow", "notes", "clear", "demo", "--yes", "--config", _isolated_cfg(tmp_path)])
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)     # clean exit, not a bare RuntimeError traceback
+    # Collapse Rich's console-width-dependent line wrapping before the substring check.
+    assert "Failed to clear notes" in " ".join(result.stdout.split())
+
+
+def test_workflow_notes_clear_tolerates_malformed_workflow_yaml(atom_home, tmp_path):
+    (atom_home / "workflows").mkdir(parents=True, exist_ok=True)
+    (atom_home / "workflows" / "brokenwf.yaml").write_text("name: brokenwf\nsteps: []\n")
+    from atom.notes import notes_root
+    root = notes_root(str(atom_home), "brokenwf")
+    (root / "pages").mkdir(parents=True)
+    result = runner.invoke(
+        app, ["workflow", "notes", "clear", "brokenwf", "--yes", "--config", _isolated_cfg(tmp_path)])
+    assert result.exit_code == 0, result.stdout
+    assert not root.exists()
 
 
 def test_workflow_notes_clear_refuses_when_active_run(atom_home):

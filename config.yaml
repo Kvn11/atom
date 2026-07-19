@@ -28,6 +28,11 @@ workflow:
   max_parallel: 4          # tasks run concurrently within a step
   task_timeout_seconds: 1800   # 0 or negative disables the per-task timeout
 
+notes:
+  expose_to_logseq: true    # show each workflow's Logseq vault in the desktop app's graph switcher
+                            # (as `atom.<slug>`, no manual export). false -> isolated ~/.atom/notes.
+  # logseq_root_dir: ~/logseq   # override only if your Logseq app's graph home isn't ~/logseq
+
 queue:
   max_concurrent_runs: 1   # how many workflow RUNS execute at once (raise when compute grows)
   poll_interval_seconds: 3 # worker re-scan interval for cross-process enqueues + crash recovery

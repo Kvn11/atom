@@ -328,7 +328,11 @@ class WorkflowEngine:
             notes_binding = None
             if workflow.notes.enabled:
                 try:
-                    notes_binding = ensure_vault(self.cfg.home, workflow.name, workflow.notes)
+                    notes_binding = ensure_vault(
+                        self.cfg.home, workflow.name, workflow.notes,
+                        expose_to_logseq=self.cfg.notes.expose_to_logseq,
+                        logseq_root_dir=self.cfg.notes.logseq_root_dir,
+                    )
                 except Exception as exc:  # noqa: BLE001 — notes setup failure halts the run cleanly
                     if manifest.steps and manifest.steps[0].tasks:
                         manifest.steps[0].tasks[0].status = "failed"

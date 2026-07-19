@@ -10,3 +10,19 @@ def test_todos_config_defaults():
     assert isinstance(cfg.todos, TodosConfig)
     assert cfg.todos.continuation_nudge is True
     assert cfg.todos.max_nudges == 2
+
+
+def test_notes_runtime_config_defaults():
+    from atom.config.schema import AtomConfig
+    cfg = AtomConfig()
+    assert cfg.notes.expose_to_logseq is False       # field default is off; config.yaml turns it on
+    assert cfg.notes.logseq_root_dir is None
+
+
+def test_notes_runtime_config_from_yaml():
+    from atom.config.schema import AtomConfig
+    cfg = AtomConfig.model_validate(
+        {"notes": {"expose_to_logseq": True, "logseq_root_dir": "~/logseq"}}
+    )
+    assert cfg.notes.expose_to_logseq is True
+    assert cfg.notes.logseq_root_dir == "~/logseq"

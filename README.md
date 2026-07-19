@@ -80,10 +80,18 @@ notes:
   # graph: my-graph      # optional; defaults to the slugified workflow name
 ```
 
-When enabled, atom ensures a Logseq graph at `$ATOM_HOME/notes/<workflow-slug>/` (once, reused
-across runs) and injects a snippet into each task's system prompt telling the agent where the vault
-is and to `load_skill("logseq-cli")` for the CLI commands. Try it with `workflows/notes-smoke.yaml`
-(run it twice — the second run recalls the first run's entry).
+When enabled, atom provisions a Logseq graph for the workflow (once, reused across runs) and injects
+a snippet into each task's system prompt telling the agent where the vault is and to
+`load_skill("logseq-cli")` for the CLI commands. Try it with `workflows/notes-smoke.yaml` (run it
+twice — the second run recalls the first run's entry).
+
+By default (`notes.expose_to_logseq: true` in `config.yaml`) the vault is provisioned **inside your
+Logseq desktop app's graph home** as `atom.<workflow-slug>`, so it shows up in the app's graph
+switcher with no manual export — a **new** vault appears the next time you launch Logseq, and writes
+to an already-open graph appear live. Set `notes.expose_to_logseq: false` to keep vaults isolated
+at `$ATOM_HOME/notes/<slug>/` (invisible to the GUI) for headless/remote deployments; use
+`notes.logseq_root_dir` only if your app's graph home isn't `~/logseq`. This co-location assumes
+atom and Logseq share one host (Phase-1); it does not apply to the future Docker sandbox.
 
 ### File inputs
 

@@ -86,3 +86,124 @@ def test_clear_vault_refuses_outside_notes_dir(atom_home, monkeypatch):
     monkeypatch.setattr(notes_mod, "notes_root", lambda home, name: Path(home) / "workflows")
     with pytest.raises(ValueError):
         notes_mod.clear_vault(str(atom_home), "x")
+
+
+def test_atom_graph_name_prefixes_and_slugs():
+    from atom.notes import ATOM_GRAPH_PREFIX, _atom_graph_name
+    assert _atom_graph_name("Research Agent", None) == f"{ATOM_GRAPH_PREFIX}research-agent"
+    assert _atom_graph_name("wf", "My Custom Graph") == f"{ATOM_GRAPH_PREFIX}my-custom-graph"
+    # the name is always namespaced, so it is safe to feed to `graph remove`
+    assert _atom_graph_name("anything", None).startswith(ATOM_GRAPH_PREFIX)
+
+
+def test_resolve_logseq_root_override_wins(tmp_path, monkeypatch):
+    from atom.notes import resolve_logseq_root
+    monkeypatch.delenv("LOGSEQ_GRAPHS_DIR", raising=False)
+    assert resolve_logseq_root(str(tmp_path / "home")) == (tmp_path / "home").resolve()
+
+
+def test_resolve_logseq_root_env_points_at_graphs_dir(tmp_path, monkeypatch):
+    from atom.notes import resolve_logseq_root
+    # $LOGSEQ_GRAPHS_DIR is the graphs/ dir; the CLI root-dir is its parent.
+    monkeypatch.setenv("LOGSEQ_GRAPHS_DIR", str(tmp_path / "gg" / "graphs"))
+    assert resolve_logseq_root(None) == (tmp_path / "gg").resolve()
+
+
+def test_list_graph_names_parses_json_and_tolerates_garbage(tmp_path):
+    from atom.notes import _list_graph_names
+    ok = lambda args: (0, '{"data":{"graphs":["atom.wf","Demo"]}}', "")
+    assert _list_graph_names(ok, tmp_path) == ["atom.wf", "Demo"]
+    garbage = lambda args: (0, "not json", "")
+    assert _list_graph_names(garbage, tmp_path) == []
+
+
+def test_ensure_vault_exposed_provisions_namespaced_in_home(atom_home, tmp_path):
+    home = tmp_path / "logseq"
+    calls = []
+
+    def fake_runner(args):
+        calls.append(args)
+        if args[1:3] == ["graph", "list"]:
+            return 0, '{"data":{"graphs":[]}}', ""
+        return 0, 'Created graph "atom.research-agent"', ""
+
+    cfg = SimpleNamespace(provider="logseq", graph=None)
+    binding = ensure_vault(
+        str(atom_home), "Research Agent", cfg,
+        expose_to_logseq=True, logseq_root_dir=str(home), runner=fake_runner,
+    )
+    assert binding.graph == "atom.research-agent"
+    assert binding.root_dir == str(home.resolve())
+    create = next(a for a in calls if a[1:3] == ["graph", "create"])
+    assert create[create.index("--graph") + 1] == "atom.research-agent"
+    assert create[create.index("--root-dir") + 1] == str(home.resolve())
+
+
+def test_ensure_vault_exposed_reuses_when_present(atom_home, tmp_path):
+    calls = []
+
+    def fake_runner(args):
+        calls.append(args)
+        if args[1:3] == ["graph", "list"]:
+            return 0, '{"data":{"graphs":["atom.wf","Demo"]}}', ""
+        return 0, "", ""
+
+    cfg = SimpleNamespace(provider="logseq", graph=None)
+    ensure_vault(str(atom_home), "wf", cfg,
+                 expose_to_logseq=True, logseq_root_dir=str(tmp_path), runner=fake_runner)
+    assert not any(a[1:3] == ["graph", "create"] for a in calls)  # reused
+
+
+def test_ensure_vault_default_is_isolated(atom_home):
+    # No expose flag -> legacy isolated location + bare slug graph name (backward compatible).
+    def fake_runner(args):
+        if args[1:3] == ["graph", "list"]:
+            return 0, '{"data":{"graphs":[]}}', ""
+        return 0, "", ""
+
+    cfg = SimpleNamespace(provider="logseq", graph=None)
+    b = ensure_vault(str(atom_home), "wf", cfg, runner=fake_runner)
+    assert b.graph == "wf"
+    assert b.root_dir == str(atom_home / "notes" / "wf")
+
+
+def test_clear_vault_exposed_removes_namespaced_graph(tmp_path):
+    from atom.notes import clear_vault
+    calls = []
+
+    def fake_runner(args):
+        calls.append(args)
+        if args[1:3] == ["graph", "list"]:
+            return 0, '{"data":{"graphs":["atom.wf","Demo"]}}', ""
+        return 0, "removed", ""
+
+    assert clear_vault("ignored", "wf", expose_to_logseq=True,
+                       logseq_root_dir=str(tmp_path), runner=fake_runner) is True
+    remove = next(a for a in calls if a[1:3] == ["graph", "remove"])
+    assert remove[remove.index("--graph") + 1] == "atom.wf"
+
+
+def test_clear_vault_exposed_absent_is_false_and_never_removes(tmp_path):
+    from atom.notes import clear_vault
+
+    def fake_runner(args):
+        if args[1:3] == ["graph", "list"]:
+            # a personal graph literally named "wf" is present; atom.wf is NOT.
+            return 0, '{"data":{"graphs":["wf","Demo"]}}', ""
+        raise AssertionError("must not `graph remove` when atom.<slug> is absent")
+
+    assert clear_vault("x", "wf", expose_to_logseq=True,
+                       logseq_root_dir=str(tmp_path), runner=fake_runner) is False
+
+
+def test_clear_vault_exposed_busy_raises(tmp_path):
+    from atom.notes import clear_vault, VaultBusyError
+
+    def fake_runner(args):
+        if args[1:3] == ["graph", "list"]:
+            return 0, '{"data":{"graphs":["atom.wf"]}}', ""
+        return 1, "", "server is owned by another process"
+
+    with pytest.raises(VaultBusyError):
+        clear_vault("x", "wf", expose_to_logseq=True,
+                    logseq_root_dir=str(tmp_path), runner=fake_runner)
