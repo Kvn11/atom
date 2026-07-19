@@ -22,7 +22,6 @@ from langchain_core.language_models import BaseChatModel
 T = TypeVar("T")
 
 _RETRYABLE_MARKERS = (
-    "429", "500", "502", "503", "504", "529",
     "overloaded", "rate limit", "rate_limit", "timeout", "timed out",
     "temporarily unavailable", "unavailable", "connection",
     "resource_exhausted", "resource exhausted", "internal", "deadline",
@@ -62,6 +61,30 @@ def is_retryable(exc: Exception) -> bool:
         return True
     text = str(exc).lower()
     return any(m in text for m in _RETRYABLE_MARKERS)
+
+
+_OVERFLOW_MARKERS = (
+    "input token count",                      # google-genai
+    "token count exceeds",                    # google-genai
+    "exceeds the maximum number of tokens",   # google-genai
+    "prompt is too long",                     # anthropic
+    "context_length_exceeded",                # openai
+    "maximum context length",                 # openai
+    "reduce the length of the messages",      # openai
+    "context window",
+    "context length",
+    "too many tokens",
+    "input is too long",
+    "maximum number of tokens",
+)
+
+
+def is_context_overflow(exc: Exception) -> bool:
+    """True if ``exc`` is a permanent-for-this-input context/token overflow — a 4xx the model will
+    reject again unless the input shrinks. Disjoint from :func:`is_retryable`: overflow is never a
+    transient retry, so it must not be looped with backoff (futile) nor mislabeled as an outage."""
+    text = str(exc).lower()
+    return any(m in text for m in _OVERFLOW_MARKERS)
 
 
 def _backoff_ceiling(attempt: int, policy: RetryPolicy) -> float:

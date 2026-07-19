@@ -11,6 +11,7 @@ from atom.middleware.llm_error import (
     ProviderUnavailableError,
     RetryingModel,
     RetryPolicy,
+    is_context_overflow,
     is_retryable,
     run_with_retry_async,
     run_with_retry_sync,
@@ -217,3 +218,28 @@ def test_middleware_default_policy_is_20_retries():
     mw = LLMErrorHandlingMiddleware()
     assert mw.policy.max_retries == 20 and mw.policy.base_delay == 1.0
     assert mw.policy.max_delay == 30.0 and mw.policy.jitter is True
+
+
+# ---- is_context_overflow ------------------------------------------------
+
+def test_overflow_detects_gemini():
+    exc = _Gemini(400, "INVALID_ARGUMENT. The input token count (1052342) exceeds the maximum "
+                       "number of tokens allowed (1048576).")
+    assert is_context_overflow(exc) and not is_retryable(exc)
+
+
+def test_overflow_detects_anthropic():
+    exc = _Anthropic(400, "prompt is too long: 250000 tokens > 200000 maximum")
+    assert is_context_overflow(exc) and not is_retryable(exc)
+
+
+def test_overflow_detects_openai():
+    exc = Exception("Error code: 400 - context_length_exceeded: maximum context length is 128000 tokens")
+    assert is_context_overflow(exc) and not is_retryable(exc)
+
+
+def test_overflow_false_for_transient_and_unrelated():
+    assert not is_context_overflow(_Anthropic(429, "rate limit exceeded"))
+    assert not is_context_overflow(_Gemini(503, "UNAVAILABLE"))
+    assert not is_context_overflow(_Anthropic(400, "invalid api key"))
+    assert not is_context_overflow(_Anthropic(400, "bad request"))
