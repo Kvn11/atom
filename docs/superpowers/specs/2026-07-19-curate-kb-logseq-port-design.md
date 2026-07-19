@@ -1,7 +1,16 @@
 # Port `curate-knowledge-base` skill from Obsidian to Logseq — design
 
 Date: 2026-07-19
-Status: approved (ready for implementation plan)
+Status: implemented (branch feat/curate-kb-logseq-port)
+
+> **Post-implementation correction (2026-07-19):** live-graph verification found that a `#curator`
+> flag block must contain **no `[[wikilinks]]` at all**. The `logseq` CLI propagates a flag block's
+> tag + properties onto every page its content `[[references]]`, polluting them (residue survives
+> `remove block` and is invisible to the flag enumeration). The annotation design described below
+> (which put `[[Other]]` inside flag content and enumerated conflicts via `:block/refs`) is therefore
+> **superseded**: the shipped `SKILL.md` §8/§9 names the other page in **plain text** + the
+> `curator-conflicts-with` text property, and idempotency keys on the `#curator` tag + content text.
+> **The shipped `SKILL.md` is authoritative** wherever it diverges from this doc.
 
 ## Summary
 

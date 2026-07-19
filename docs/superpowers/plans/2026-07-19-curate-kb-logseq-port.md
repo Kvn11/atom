@@ -8,6 +8,14 @@
 
 **Tech Stack:** Python 3.12 (stdlib only, for the one remaining script + its pytest), the `logseq` CLI (Datascript DB graph), Markdown (the SKILL.md prose).
 
+> **Post-implementation correction (2026-07-19):** live-graph verification (Task 5) found that
+> `logseq upsert block --content '…[[X]]…' --update-tags/--update-properties` propagates the `#curator`
+> tag + properties onto every page the content `[[references]]`, polluting them (residue survives
+> `remove block`, invisible to enumeration). So the annotation commands below that put `[[Other]]`
+> inside flag content, and the `:block/refs` idempotency variant, are **superseded**: flag content
+> names the other page in **plain text** + the `curator-conflicts-with` property, and enumeration keys
+> on the `#curator` tag + content text. The shipped `SKILL.md` §8/§9 is authoritative.
+
 ## Global Constraints
 
 - **Provider is Logseq-only.** No Obsidian, no clone, no rename, no dual-vault. The skill takes its graph from its prompt; it does NOT hard-wire atom's `$ATOM_HOME/notes/<slug>` layout.
