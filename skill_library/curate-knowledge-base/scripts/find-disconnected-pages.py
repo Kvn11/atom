@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Find the disconnected *islands* in a Logseq DB graph.
 
-Unlike the Obsidian original, this script does NOT read files or parse
-wikilinks: the Logseq DB already knows the link graph. The curator supplies
+This script does NOT read files or parse wikilinks: the Logseq DB already
+knows the link graph. The curator supplies
 two JSON inputs, both straight from `logseq query --output json`:
 
   --pages-json  result rows of the user-page query, e.g. [["Alpha",2], ...]
