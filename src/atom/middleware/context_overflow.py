@@ -32,7 +32,13 @@ def _msg_text(m: Any) -> str:
 
 
 def _msg_tokens(m: Any) -> int:
-    return _approx_tokens(_msg_text(m)) + 4  # small per-message overhead
+    n = _approx_tokens(_msg_text(m)) + 4  # small per-message overhead
+    tool_calls = getattr(m, "tool_calls", None)
+    if tool_calls:
+        # tool-call args carry real weight though `content` is often empty; over-counting is the
+        # safe direction for an emergency trimmer (drop more, never under-trim the real culprit).
+        n += _approx_tokens(str(tool_calls))
+    return n
 
 
 def _is_protected(m: Any) -> bool:
@@ -79,5 +85,9 @@ def trim_messages_to_budget(messages: list, approx_budget: int, *, single_msg_ma
         used += t
     kept = _drop_dangling_leading_tool_messages(list(reversed(kept_rev)))
 
+    # protected (system + pinned-instruction) are always a FRONT PREFIX in the real call path:
+    # PinnedSummarizationMiddleware injects the pin at index 0/1 (see compaction.py), so
+    # `protected + kept` preserves chronological order. If pins were ever injected mid-history,
+    # this concatenation would reorder — revisit here.
     result = protected + kept
     return [_truncate_message(m, approx_budget, single_msg_marker) for m in result]
