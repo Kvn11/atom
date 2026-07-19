@@ -241,6 +241,11 @@ export function RunView({ runId, onBack, onOpenRun }:
         )}
       </div>
 
+      {manifest && manifest.status === "halted" && (
+        <HaltBanner manifest={manifest}
+          onJump={(step, task) => { setSel({ step, task }); setTab("transcript"); }} />
+      )}
+
       {exportMsg && (
         <div className={`export-banner ${exportMsg.kind}`}>
           <span className="export-text">{exportMsg.text}</span>
@@ -327,6 +332,45 @@ export function RunView({ runId, onBack, onOpenRun }:
               : <Deliverables runId={runId} arts={arts} open={openArt} setOpen={setOpenArt} />}
           </section>
         </div>
+      )}
+    </div>
+  );
+}
+
+// Shown when a run halts — a failed task stopped it and later steps never ran. Lists every failed
+// task with the reason the engine recorded (TaskState.error, e.g. "GraphRecursionError: …" or a
+// timeout), and jumps to that task's transcript on click. Persistent: it IS the run's terminal
+// status, not a dismissable notice. The reason is preformatted (errors can be multi-line).
+function HaltBanner(
+  { manifest, onJump }:
+  { manifest: Manifest; onJump: (step: number, task: string) => void },
+) {
+  const failed = manifest.steps.flatMap((s) =>
+    s.tasks.filter((t) => t.status === "failed")
+      .map((t) => ({ step: s.index, task: t.id, error: t.error })));
+  return (
+    <div className="halt-banner" role="alert">
+      <div className="halt-head">
+        <span className="halt-icon" aria-hidden="true">⚠</span>
+        <span className="halt-title">Run halted</span>
+        <span className="halt-sub">
+          {failed.length
+            ? `${failed.length} task${failed.length > 1 ? "s" : ""} failed`
+            : "no task-level error was recorded"}
+        </span>
+      </div>
+      {failed.length > 0 && (
+        <ul className="halt-list">
+          {failed.map((f) => (
+            <li key={`${f.step}-${f.task}`} className="halt-item">
+              <button className="halt-jump" onClick={() => onJump(f.step, f.task)}
+                title="Open this task's transcript">
+                step {f.step + 1} · {f.task}
+              </button>
+              <div className="halt-reason">{f.error || "Task failed without an error message."}</div>
+            </li>
+          ))}
+        </ul>
       )}
     </div>
   );
