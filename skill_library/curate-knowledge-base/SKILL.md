@@ -97,10 +97,10 @@ Split the working set into sub-agent-sized groups. A group is sized so one gener
 Partitioning order:
 
 1. **Connected components first.** Each connected component from `find-disconnected-pages.py` is a natural group boundary. If a component exceeds the size bound, split it by hub-neighborhoods: pick the highest-degree page in the component as a hub, assign it and its 1-hop neighbors as one group, and recursively partition the remainder.
-2. **Folder/tag clusters next.** Pages in the same folder or sharing a dominant tag form a natural group, especially for orphans or pages with only folder-based cohesion.
+2. **Namespace/tag clusters next.** Pages in the same namespace (the `parent/child` page hierarchy) or sharing a dominant tag form a natural group, especially for orphans or pages with only namespace- or tag-based cohesion.
 3. **Residual pages** (orphans not captured above) go into small groups of ≤ 20.
 
-Label every group (e.g., `group-1-component-A`, `group-7-folder-security`). You will use these labels in the Reduce and Report stages.
+Label every group (e.g., `group-1-component-A`, `group-7-namespace-security`). You will use these labels in the Reduce and Report stages.
 
 Do not read page bodies during Partition. Use only the page titles and link graph from Sense.
 
