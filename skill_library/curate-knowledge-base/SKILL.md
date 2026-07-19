@@ -197,6 +197,17 @@ logseq upsert block --graph <NAME> [--root-dir <PATH>] --target-page "<HostPage>
   --update-properties '{:curator-type "<type>" :curator-flagged "<YYYY-MM-DD>" [:curator-conflicts-with "<Other>"]}'
 ```
 
+The `--content` names the other page in **plain text** (e.g. `page Beta`), never as a `[[wikilink]]`. The machine-readable link stays in the `curator-conflicts-with` property.
+
+> **⚠️ Never put a `[[wikilink]]` to the conflicting/superseding page inside a flag block's `--content`.**
+> When `upsert block` carries `--update-tags`/`--update-properties`, the CLI stamps the `#curator`
+> tag AND every `curator-*` property onto **every page the content `[[references]]`** — polluting
+> that page. The residue survives `remove block` and is invisible to the flag-enumeration query,
+> breaking convergence and the single-writer/no-pollution invariant. Name the other page in **plain
+> text** in the content and record it in the `curator-conflicts-with` property. (Earned-wikilink edits
+> are unaffected: they edit a normal block's content **without** `--update-tags`/`--update-properties`,
+> so `[[links]]` there are fine.)
+
 Then record the annotation for your report.
 
 **Things you NEVER do:**
@@ -217,9 +228,9 @@ Write in-graph knowledge-caveat annotations as a **block tagged `#curator`** wit
 ```bash
 logseq upsert block --graph <NAME> [--root-dir <PATH>] --target-page "<HostPage>" \
   [--target-id <blockId> --pos last-child] \
-  --content 'Contradiction: claim "X" here conflicts with [[Other]]; evidence cited both sides; resolving needs research/RE/domain analysis beyond curation. — wiki-curator' \
+  --content 'Contradiction: claim "X" here conflicts with page <Other>; evidence cited on both sides; resolving needs research/RE/domain analysis beyond curation. — wiki-curator' \
   --update-tags '["curator"]' \
-  --update-properties '{:curator-type "contradiction" :curator-flagged "<YYYY-MM-DD>" :curator-conflicts-with "Other"}'
+  --update-properties '{:curator-type "contradiction" :curator-flagged "<YYYY-MM-DD>" :curator-conflicts-with "<Other>"}'
 ```
 
 **Stale claim** — the superseding page goes in `curator-conflicts-with`:
@@ -227,9 +238,9 @@ logseq upsert block --graph <NAME> [--root-dir <PATH>] --target-page "<HostPage>
 ```bash
 logseq upsert block --graph <NAME> [--root-dir <PATH>] --target-page "<HostPage>" \
   [--target-id <blockId> --pos last-child] \
-  --content 'Stale claim: "X" may be superseded by [[Newer]]. A domain specialist should verify currency. — wiki-curator' \
+  --content 'Stale claim: "X" may be superseded by page <Newer>. A domain specialist should verify currency. — wiki-curator' \
   --update-tags '["curator"]' \
-  --update-properties '{:curator-type "stale" :curator-flagged "<date>" :curator-conflicts-with "Newer"}'
+  --update-properties '{:curator-type "stale" :curator-flagged "<date>" :curator-conflicts-with "<Newer>"}'
 ```
 
 **Ambiguous / unverified claim** — no `curator-conflicts-with`; page-level attach is fine:
@@ -248,23 +259,21 @@ logseq upsert block --graph <NAME> [--root-dir <PATH>] --target-page "<HostPage>
    logseq query --graph <NAME> [--root-dir <PATH>] --output json --query \
    '[:find ?host ?content :where [?t :block/name "curator"] [?b :block/tags ?t] [?b :block/page ?hp] [?hp :block/title ?host] [?b :block/title ?content]]'
    ```
-   For contradiction/stale flags, also fetch the conflicting-page ref (excluding the curator tag itself via `(not= ?r ?t)`):
+   The curator reads the conflicting/superseding page from each flag's **content text** and its `curator-conflicts-with` property (both rendered by `logseq show`), **not** from `:block/refs` — a flag's content deliberately carries no `[[ref]]` (see §8's propagation warning). Match a stored flag to a candidate by (host page, the other page named in the content/property, `curator-type`).
+2. If a flag already exists for the same (host page/block, other page, type) **and** the conflict still holds (re-verified in Stage 5): leave it in place — optionally refresh its `curator-flagged` date. Do NOT duplicate it.
+3. If a flag exists but the conflict **no longer holds** (evidence resolved or pages updated): remove it. This is how convergence shrinks the annotation surface over time. Get the flag block's id, then remove it:
    ```bash
-   logseq query --graph <NAME> [--root-dir <PATH>] --output json --query \
-   '[:find ?host ?refname ?content :where [?t :block/name "curator"] [?b :block/tags ?t] [?b :block/page ?hp] [?hp :block/title ?host] [?b :block/title ?content] [?b :block/refs ?r] [(not= ?r ?t)] [?r :block/name] [?r :block/title ?refname]]'
-   ```
-2. If a flag already exists for the same (host page/block, conflicting page) **and** the conflict still holds (re-verified in Stage 5): leave it in place — optionally refresh its `curator-flagged` date. Do NOT duplicate it.
-3. If a flag exists but the conflict **no longer holds** (evidence resolved or pages updated): remove it. This is how convergence shrinks the annotation surface over time.
-   ```bash
+   # List curator-tagged nodes; keep those whose "node/type" is "block" to get the flag block id
+   logseq list node --graph <NAME> [--root-dir <PATH>] --tags curator --output json
    logseq remove block --graph <NAME> [--root-dir <PATH>] --id <blockId>     # or --uuid <uuid>
    ```
 4. If no matching flag exists: write the new annotation.
 
 > **⚠ Never hardcode `:user.property/*` or `:user.class/*` db/idents in any query.**
 > Logseq mints those idents with a **random per-graph suffix**, so a literal like
-> `:user.property/curator-type` matches nothing in another graph. Every read/enumeration
-> query above keys off the tag's `:block/name "curator"` and its `:block/refs` instead —
-> portable across graphs. Writes use the friendly property names (`curator-type`,
+> `:user.property/curator-type` matches nothing in another graph. The enumeration query above
+> keys off the tag's `:block/name "curator"` (via `:block/tags`) instead — portable across
+> graphs. Writes use the friendly property names (`curator-type`,
 > `curator-flagged`, `curator-conflicts-with`); the CLI resolves those to the right idents.
 
 This annotation is **knowledge**, not a log. It is the one thing the curator writes to the graph besides earned organizational edits. Future readers — human or specialist agent — use it to see what still needs resolution.
