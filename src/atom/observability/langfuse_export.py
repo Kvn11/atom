@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import logging
 import os
 import time
 from typing import Any, Callable
@@ -23,6 +24,8 @@ from atom.observability.export import (
     resolve_run_ids,    # noqa: F401 — dispatched CLI/API import this from here too
 )
 from atom.workflow.run_store import RunStore
+
+logger = logging.getLogger(__name__)
 
 
 def _resolve_keys(cfg: Any) -> tuple[str | None, str | None, str | None]:
@@ -104,6 +107,57 @@ def _item_id(item: Any) -> str:
     return item["id"] if isinstance(item, dict) else None
 
 
+def _is_too_large(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return "too large" in text or "exceeds limit" in text or "413" in text
+
+
+def _next_cursor(resp: Any):
+    meta = getattr(resp, "meta", None) or getattr(resp, "metadata", None)
+    if meta is None:
+        return None
+    for attr in ("next_cursor", "nextCursor", "cursor"):
+        val = meta.get(attr) if isinstance(meta, dict) else getattr(meta, attr, None)
+        if val:
+            return val
+    return None
+
+
+def _assemble_from_pages(client: Any, trace_id: str) -> dict:
+    """Rebuild an oversized trace WITHOUT the monolithic trace.get: metadata via fields='core',
+    observations via cursor-paginated get_many (each page bounded well under the read limit)."""
+    core = _as_dict(client.api.trace.get(trace_id, fields="core"))
+    observations: list = []
+    cursor = None
+    while True:
+        resp = client.api.observations.get_many(trace_id=trace_id, cursor=cursor, limit=1000)
+        items = list(getattr(resp, "data", resp) or [])
+        observations.extend(_as_dict(it) for it in items)
+        cursor = _next_cursor(resp)
+        if not items or not cursor:
+            break
+    core["observations"] = observations
+    return core
+
+
+def _fetch_trace_resilient(client: Any, trace_id: str) -> dict:
+    """Hydrate one trace, tolerating a trace too large for the read API. Fast path is the normal
+    trace.get; on any failure fall back to paginated assembly, then to a metadata-safe placeholder."""
+    try:
+        return _as_dict(client.api.trace.get(trace_id))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("langfuse export: trace.get(%s) failed (%s: %s); paginating observations",
+                       trace_id, type(exc).__name__, exc)
+    try:
+        return _assemble_from_pages(client, trace_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("langfuse export: paginated fallback for trace %s failed (%s: %s); "
+                       "writing a degraded placeholder", trace_id, type(exc).__name__, exc)
+        # is_subagent=True keeps a lost trace from being miscounted as a satisfied lead.
+        return {"id": trace_id, "observations": [],
+                "metadata": {"is_subagent": True, "atom_export_degraded": "fetch-failed"}}
+
+
 def fetch_session_traces(client: Any, run_id: str) -> list[dict]:
     """List every trace in the run's session and hydrate each with its observation tree.
 
@@ -117,8 +171,7 @@ def fetch_session_traces(client: Any, run_id: str) -> list[dict]:
         if not items:
             break
         for it in items:
-            full = client.api.trace.get(_item_id(it))
-            trees.append(_as_dict(full))
+            trees.append(_fetch_trace_resilient(client, _item_id(it)))
         page += 1
     return trees
 

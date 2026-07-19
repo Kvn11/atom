@@ -440,3 +440,99 @@ def test_export_run_retries_until_complete_under_ingestion_lag(atom_home, monkey
     result = export_run(str(atom_home), "r1", client=client, now=lambda: "t", sleep=_no_sleep)
     assert result.complete is True and result.fetched_roots == 2
     assert client.api.list_calls >= 4       # poll 1 (page1+empty) + poll 2 (page1+empty) -> re-fetched
+
+
+# --- resilient fetch: paginated fallback for oversized traces ---------------
+
+import types
+
+
+class _TooLarge(Exception):
+    def __init__(self):
+        super().__init__("status code 422: observations in trace are too large: "
+                         "80.30mb exceeds limit of 80.00mb")
+
+
+class _ObsPage:
+    def __init__(self, data, next_cursor):
+        self.data = data
+        self.meta = types.SimpleNamespace(next_cursor=next_cursor)
+
+
+class _ResilientAPI:
+    def __init__(self, pages, core_by_id, fail_full, obs_by_trace, fail_core=None):
+        self._pages = pages
+        self._core = core_by_id
+        self._fail_full = fail_full
+        self._fail_core = fail_core or set()
+        self._obs = obs_by_trace
+        self.session_ids = []
+
+    class _TraceNS:
+        def __init__(self, o):
+            self._o = o
+
+        def list(self, session_id, page=1):
+            self._o.session_ids.append(session_id)
+            idx = page - 1
+            return _Page(self._o._pages[idx] if idx < len(self._o._pages) else [])
+
+        def get(self, trace_id, fields=None):
+            if fields == "core":
+                if trace_id in self._o._fail_core:
+                    raise _TooLarge()
+                return self._o._core[trace_id]
+            if trace_id in self._o._fail_full:
+                raise _TooLarge()
+            return self._o._core[trace_id]
+
+    class _ObsNS:
+        def __init__(self, o):
+            self._o = o
+
+        def get_many(self, *, trace_id, cursor=None, limit=None):
+            pages = self._o._obs.get(trace_id, [[]])
+            i = cursor or 0
+            data = pages[i] if i < len(pages) else []
+            nxt = (i + 1) if (i + 1) < len(pages) else None
+            return _ObsPage(data, nxt)
+
+    @property
+    def trace(self):
+        return _ResilientAPI._TraceNS(self)
+
+    @property
+    def observations(self):
+        return _ResilientAPI._ObsNS(self)
+
+
+class _ResilientClient:
+    def __init__(self, pages, core_by_id, fail_full, obs_by_trace, fail_core=None):
+        self.api = _ResilientAPI(pages, core_by_id, fail_full, obs_by_trace, fail_core)
+
+
+def test_export_paginates_observations_when_trace_get_too_large(atom_home):
+    core = {"L0": _lead("L0", "t0")}                      # carries lead metadata via fields="core"
+    obs = {"L0": [[{"id": "o1", "input": "big"}, {"id": "o2", "output": "stuff"}]]}
+    client = _ResilientClient([[_summary("L0")], []], core, {"L0"}, obs)
+    trees = fetch_session_traces(client, "r1")
+    assert len(trees) == 1
+    assert trees[0]["id"] == "L0"
+    assert trees[0]["metadata"]["agent_role"] == "lead"                 # metadata preserved
+    assert {o["id"] for o in trees[0]["observations"]} == {"o1", "o2"}   # full data preserved
+
+
+def test_export_paginates_across_multiple_pages(atom_home):
+    core = {"L0": _lead("L0", "t0")}
+    obs = {"L0": [[{"id": "o1"}], [{"id": "o2"}], []]}   # cursor 0 -> 1 -> stop
+    client = _ResilientClient([[_summary("L0")], []], core, {"L0"}, obs)
+    trees = fetch_session_traces(client, "r1")
+    assert {o["id"] for o in trees[0]["observations"]} == {"o1", "o2"}
+
+
+def test_export_placeholder_when_even_core_fails(atom_home):
+    client = _ResilientClient([[_summary("L0")], []], {}, {"L0"}, {}, fail_core={"L0"})
+    trees = fetch_session_traces(client, "r1")
+    assert len(trees) == 1
+    assert trees[0]["metadata"].get("atom_export_degraded") == "fetch-failed"
+    assert trees[0]["metadata"].get("is_subagent") is True   # not counted as a lead
