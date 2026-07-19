@@ -86,22 +86,36 @@ def _default_runner(args: list[str]) -> "tuple[int, str, str]":
     return proc.returncode, proc.stdout, proc.stderr
 
 
-def ensure_vault(home, workflow_name: str, notes_cfg, *, runner: Optional[CLIRunner] = None) -> NotesBinding:
-    """Ensure the workflow's Logseq graph exists (create once, reuse thereafter). Idempotent."""
+def ensure_vault(
+    home,
+    workflow_name: str,
+    notes_cfg,
+    *,
+    expose_to_logseq: bool = False,
+    logseq_root_dir: Optional[str] = None,
+    runner: Optional[CLIRunner] = None,
+) -> NotesBinding:
+    """Ensure the workflow's Logseq graph exists (create once, reuse thereafter). Idempotent.
+
+    When ``expose_to_logseq`` is True the graph is provisioned as ``atom.<slug>`` inside the desktop
+    app's graph home (``resolve_logseq_root(logseq_root_dir)``) so it appears in the app's switcher;
+    otherwise it lives isolated at ``$ATOM_HOME/notes/<slug>/`` under a bare-slug graph name.
+    """
     provider = getattr(notes_cfg, "provider", "logseq")
     if provider != "logseq":
         raise NotImplementedError(f"notes provider '{provider}' is not supported")
     run = runner or _default_runner
-    root = notes_root(home, workflow_name)
-    root.mkdir(parents=True, exist_ok=True)
-    graph = getattr(notes_cfg, "graph", None) or _slug(workflow_name)
+    graph_override = getattr(notes_cfg, "graph", None)
 
-    _rc, out, _err = run(["logseq", "graph", "list", "--root-dir", str(root), "--output", "json"])
-    try:
-        existing = (json.loads(out).get("data") or {}).get("graphs") or []
-    except (ValueError, AttributeError):
-        existing = []
-    if graph not in existing:
+    if expose_to_logseq:
+        root = resolve_logseq_root(logseq_root_dir)
+        graph = _atom_graph_name(workflow_name, graph_override)
+    else:
+        root = notes_root(home, workflow_name)
+        graph = graph_override or _slug(workflow_name)
+    root.mkdir(parents=True, exist_ok=True)
+
+    if graph not in _list_graph_names(run, root):
         run(["logseq", "graph", "create", "--graph", graph, "--root-dir", str(root)])
     return NotesBinding(provider="logseq", root_dir=str(root), graph=graph)
 

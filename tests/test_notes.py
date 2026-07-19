@@ -115,3 +115,53 @@ def test_list_graph_names_parses_json_and_tolerates_garbage(tmp_path):
     assert _list_graph_names(ok, tmp_path) == ["atom.wf", "Demo"]
     garbage = lambda args: (0, "not json", "")
     assert _list_graph_names(garbage, tmp_path) == []
+
+
+def test_ensure_vault_exposed_provisions_namespaced_in_home(atom_home, tmp_path):
+    home = tmp_path / "logseq"
+    calls = []
+
+    def fake_runner(args):
+        calls.append(args)
+        if args[1:3] == ["graph", "list"]:
+            return 0, '{"data":{"graphs":[]}}', ""
+        return 0, 'Created graph "atom.research-agent"', ""
+
+    cfg = SimpleNamespace(provider="logseq", graph=None)
+    binding = ensure_vault(
+        str(atom_home), "Research Agent", cfg,
+        expose_to_logseq=True, logseq_root_dir=str(home), runner=fake_runner,
+    )
+    assert binding.graph == "atom.research-agent"
+    assert binding.root_dir == str(home.resolve())
+    create = next(a for a in calls if a[1:3] == ["graph", "create"])
+    assert create[create.index("--graph") + 1] == "atom.research-agent"
+    assert create[create.index("--root-dir") + 1] == str(home.resolve())
+
+
+def test_ensure_vault_exposed_reuses_when_present(atom_home, tmp_path):
+    calls = []
+
+    def fake_runner(args):
+        calls.append(args)
+        if args[1:3] == ["graph", "list"]:
+            return 0, '{"data":{"graphs":["atom.wf","Demo"]}}', ""
+        return 0, "", ""
+
+    cfg = SimpleNamespace(provider="logseq", graph=None)
+    ensure_vault(str(atom_home), "wf", cfg,
+                 expose_to_logseq=True, logseq_root_dir=str(tmp_path), runner=fake_runner)
+    assert not any(a[1:3] == ["graph", "create"] for a in calls)  # reused
+
+
+def test_ensure_vault_default_is_isolated(atom_home):
+    # No expose flag -> legacy isolated location + bare slug graph name (backward compatible).
+    def fake_runner(args):
+        if args[1:3] == ["graph", "list"]:
+            return 0, '{"data":{"graphs":[]}}', ""
+        return 0, "", ""
+
+    cfg = SimpleNamespace(provider="logseq", graph=None)
+    b = ensure_vault(str(atom_home), "wf", cfg, runner=fake_runner)
+    assert b.graph == "wf"
+    assert b.root_dir == str(atom_home / "notes" / "wf")
