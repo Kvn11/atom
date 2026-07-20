@@ -1,255 +1,202 @@
-# Migrate persistent-notes backbone: Logseq → Obsidian
+# Migrate persistent-notes backbone: Logseq → Obsidian (device `obsidian` CLI)
 
-**Date:** 2026-07-19
-**Status:** Design — awaiting review
+**Date:** 2026-07-19 (revised 2026-07-20 after discovering the device `obsidian` CLI)
+**Status:** Design — model chosen (Option A); notes-clear removal awaiting explicit OK
 **Branch:** `feat/obsidian-migration`
 
 ## 1. Goal
 
-Replace Logseq with Obsidian as the backbone for the per-workflow knowledge bases
-("persistent notes"). Migrate **all** scripts, skills, tools, prompts, config, and tests
-so atom has no remaining dependency on Logseq or its CLI. This is a clean cutover — Logseq
-is dropped entirely, not kept as a second provider.
+Replace Logseq with Obsidian as the backbone for per-workflow knowledge bases. Migrate all
+scripts, skills, tools, prompts, config, and tests so atom has no remaining Logseq dependency.
+Clean cutover — Logseq is dropped entirely.
 
-## 2. Why the two systems differ (the crux)
+## 2. The decisive discovery: a device `obsidian` CLI
 
-The current integration is Logseq-DB-native and leans on the `logseq` CLI everywhere:
+The target device provides a real, compiled `obsidian` CLI at `/usr/local/bin/obsidian` (v1.12.7)
+— the Obsidian analog of the device-provided `logseq` CLI. It is a **bridge to the running
+Obsidian app** (the app is **guaranteed running while a workflow runs**), with a rich surface:
 
-- **Vault provisioning** (`atom.notes`) shells out to `logseq graph create/remove/list`.
-  A "graph" is a Logseq-managed database; the CLI is required to create or inspect one.
-- **Desktop visibility** (`expose_to_logseq`) provisions the graph as `atom.<slug>` inside
-  `~/logseq`, which the Logseq app **folder-scans** to populate its graph switcher.
-- **Curation** (`curate-knowledge-base` skill) uses Datascript queries (`logseq query`),
-  block-level writes (`logseq upsert block`), tag/property schema bootstrap, and works around
-  Logseq's tag/property **propagation pollution** and random-per-graph ident suffixes.
+- **Addressing:** `obsidian <command> [options]`, with a global `vault=<name>` selector. Files are
+  addressed by `file=<name>` (wikilink-style resolution) or `path=<folder/note.md>` (exact).
+- **Read/sense:** `read`, `files`, `folders`, `links`, `backlinks`, `orphans`, `deadends`,
+  `unresolved`, `tags`, `properties`, `outline`, `search`, `search:context`.
+- **Write:** `create`, `append`, `prepend`, `move`, `rename`, `delete`, `property:set/read/remove`.
+- **Vault registry:** `vaults [verbose]` lists known vaults (name → path); `vault [info=path]`
+  shows one vault's info.
 
-Obsidian's model is fundamentally different and **much simpler**:
+**Two hard constraints this imposes:**
 
-- A **vault is just a directory of `.md` files.** There is no database and **no official CLI.**
-  Provisioning is `mkdir`; clearing is `rmtree`. Links are `[[wikilinks]]`; metadata is YAML
-  frontmatter; there are no block ids and no tag/property propagation.
-- Obsidian does **not** folder-scan. Known vaults live in `obsidian.json`, and the app opens
-  one vault per window. So "auto-appear in a switcher" has no direct equivalent.
+1. **Vaults are addressed by *registered name*, never by path.** There is no `vault=<path>` and no
+   CLI command to add/open/register a vault. A directory Obsidian does not know about is
+   unreachable. Registration lives in `~/Library/Application Support/obsidian/obsidian.json`.
+2. **`vault=<name>` is optional and defaults to the *active* vault** (whatever is focused in the
+   GUI). For deterministic, unattended, concurrent runs, atom must pass `vault=<name>` on **every**
+   call — exactly the invariant the Logseq design enforced with `--graph <NAME>`.
 
-Because there is no CLI and no DB, most of the Logseq-specific machinery (the CLI runner,
-`graph list`, `VaultBusyError`, Datascript, block ids, the propagation warnings) **deletes**
-rather than translates. The port is largely a simplification.
+The user's environment already has ~18 registered vaults, each **co-located inside its project git
+repo** (`brain`→`/Users/kev/gitclones/brain`, `kalshi`→`…/kalshi_arb/knowledge/kalshi`, `*_kb`,
+`*-knowledge`, …). They deliberately manage per-project knowledge bases addressed by name.
 
-**Note:** the curate-kb skill *had* an Obsidian version (recoverable at git `c969e61`), but it was
-vendored from a different host ("kiwi") — it references a fictional `obsidian` CLI and
-`/mnt/user-data/` paths that **do not exist in atom**. Its pure-stdlib file-walk *scripts* are
-reusable; its SKILL.md prose must be re-grounded on atom's reality (file tools, no CLI).
+## 3. The model (chosen: Option A — name a registered vault)
 
-## 3. Approaches considered
+Because the CLI addresses vaults by registered name and cannot create/register one, and because the
+user already curates per-project vaults, a workflow **names an existing registered vault**:
 
-### 3a. Desktop visibility (the one real design fork)
+- Workflow YAML: `notes.enabled: true` + `notes.vault: <name>` (defaults to the workflow name when
+  omitted). The named vault must already be registered in Obsidian.
+- **atom validates, never provisions.** At run start `ensure_vault` runs `obsidian vaults verbose`,
+  confirms the name is registered, and resolves its on-disk path. If the vault is not registered the
+  run **halts cleanly** with a message telling the user to open it in Obsidian and retry (reusing
+  the engine's existing notes-setup-failure halt path). atom never creates, registers, or deletes a
+  vault.
+- **Agent interaction:** the lead/bash agents work the vault through the CLI, always
+  `obsidian vault=<name> <cmd> …`. The app is guaranteed up, so the bridge works. `bash` is required
+  (the CLI is a shell command); `notes.enabled` workflows therefore assume `sandbox.bash_enabled`.
 
-`expose_to_logseq: true` today makes a workflow's vault auto-appear in Logseq's switcher.
-Three ways to approximate that for Obsidian:
+**Alternatives considered and rejected:**
+- *Auto-provision + register `atom.<slug>`* (write `obsidian.json`, `restart` the app): preserves
+  zero-setup but edits the user's real config (risking their 18 vaults), needs an app restart to
+  register (fragile), and clutters their switcher. Rejected — the risk/complexity isn't worth it
+  for a user who already manages vaults deliberately.
+- *File tools only (no CLI):* works on the directory, but ignores the capable device CLI, can't use
+  its `orphans`/`backlinks`/`tags`/`search` sensing, and diverges from the Logseq design's shape.
+  Rejected now that a real CLI exists.
 
-| Option | What it does | Trade-off |
-|---|---|---|
-| **A. Co-locate + open once** *(chosen default)* | Provision at `~/obsidian/atom.<slug>/`. User does "Open folder as vault" once; Obsidian then remembers it forever. | Safe, minimal code, never touches Obsidian's config. Loses only the *first-time* zero-touch appear. |
-| B. Auto-register in `obsidian.json` | atom writes a vault entry into Obsidian's real config so it appears with zero manual steps. | True parity, but invasive, platform-specific, and risks corrupting the user's Obsidian config. Would need a validation spike like the Logseq one did. |
-| C. Drop it — isolated only | Only `$ATOM_HOME/notes/<slug>/` vaults; user opens manually if ever. | Simplest, but loses the visibility `expose_to_logseq` gave. |
-
-**Chosen: Option A.** It preserves the *spirit* of expose (a predictable, easy-to-open,
-namespaced location) with none of Option B's risk, and it structurally mirrors the existing
-Logseq exposed/isolated split so the code and tests map over cleanly. Option B is recorded as a
-possible follow-up if zero-touch appearance is later wanted.
-
-> **Open question for review:** confirm Option A, or pick B/C. This is the only decision that
-> materially changes `atom.notes` and the config schema.
-
-### 3b. Port strategy
-
-**Chosen: structural mirror.** Keep the existing shape of `atom.notes` (exposed vs. isolated
-mode, the `atom.` name-prefix safety guard, `NotesBinding`, `ensure_vault`/`clear_vault`) and
-swap the *substrate* from "Logseq CLI graph" to "Obsidian directory". This minimizes churn in
-`engine.py`, `cli.py`, `api/app.py`, and the tests, and keeps the load-bearing safety invariants
-(path confinement + `atom.` prefix guard) intact. Rejected: a clean-slate rewrite of the notes
-module (more churn, loses the proven guard structure for no benefit).
+**Consequence — the `notes clear` feature is removed.** `atom workflow notes clear` and
+`DELETE /api/workflows/{name}/notes` currently `rmtree` the vault. Under Option A the vault is
+**user-owned**, so a "delete the whole vault" action is dangerous and semantically wrong. Both are
+removed. *(This removes a feature previously built; flagged for explicit confirmation before the
+removal task runs.)*
 
 ## 4. Terminology & config mapping
 
 | Logseq | Obsidian |
 |---|---|
 | graph | vault |
-| `NotesBinding.graph` | `NotesBinding.vault` |
+| `NotesBinding(provider, root_dir, graph)` | `NotesBinding(provider, vault, root_dir)` — `vault` = registered name, `root_dir` = its resolved path |
 | `NotesConfig.provider: Literal["logseq"]` | `Literal["obsidian"]` |
-| `NotesConfig.graph` (workflow-YAML override) | `NotesConfig.vault` |
-| `notes.expose_to_logseq` | `notes.expose_to_obsidian` |
-| `notes.logseq_root_dir` (default `~/logseq`) | `notes.obsidian_root_dir` (default `~/obsidian`) |
-| `resolve_logseq_root` | `resolve_obsidian_root` |
-| `$LOGSEQ_GRAPHS_DIR` env | `$OBSIDIAN_VAULTS_DIR` env (points at the vaults home directly) |
-| `ATOM_GRAPH_PREFIX = "atom."` | `ATOM_VAULT_PREFIX = "atom."` (unchanged value; still the safety guard) |
-| `_atom_graph_name` | `_atom_vault_name` |
-| prompt ctx `notes.graph` | prompt ctx `notes.vault` |
-
-**`root_dir` semantics change (important):** For Logseq, `NotesBinding.root_dir` was the CLI
-`--root-dir` (the *parent* home), and `graph` named the DB within it. For Obsidian there is no
-CLI indirection: `root_dir` becomes **the vault directory itself** (the folder holding the `.md`
-files), which is exactly what the agent's file tools operate on. `vault` is just its display name.
-
-- Exposed mode: `root_dir = ~/obsidian/atom.<slug>`, `vault = atom.<slug>`.
-- Isolated mode: `root_dir = $ATOM_HOME/notes/<slug>`, `vault = <slug>` (or the workflow override).
+| `NotesConfig.graph` | `NotesConfig.vault` (defaults to workflow name; must resolve to a registered vault) |
+| `notes.expose_to_logseq`, `notes.logseq_root_dir` | **removed** (no provisioning / co-location) |
+| — | `notes.obsidian_cli: str = "obsidian"` (CLI binary name/path) |
+| `logseq graph list` (validate) | `obsidian vaults verbose` (validate + resolve path) |
+| `--graph <NAME>` on every call | `vault=<name>` on every call |
+| `clear_vault`, `VaultBusyError`, `ATOM_GRAPH_PREFIX`, `resolve_logseq_root`, `_atom_graph_name` | **removed** |
+| prompt ctx `notes.graph` | prompt ctx `notes.vault` (+ `notes.root_dir` for the island script) |
 
 ## 5. File-by-file plan
 
-### Core: `src/atom/notes.py` (rewrite)
-- Delete: `CLIRunner`, `_default_runner`, `_list_graph_names`, `VaultBusyError`, `_is_busy`,
-  the `runner=` parameter, and all `subprocess`/`json`/`shutil.which` CLI plumbing.
-- `resolve_obsidian_root(override)`: override → `$OBSIDIAN_VAULTS_DIR` → `~/obsidian`. (The env
-  var points **directly** at the vaults home, unlike `$LOGSEQ_GRAPHS_DIR` which pointed at a
-  `graphs/` subdir — no `.parent` hack.)
-- `_atom_vault_name(workflow_name, override)` → `atom.<slug>` (unchanged logic).
-- `NotesBinding(provider, root_dir, vault)`; `as_prompt_ctx()` → `{provider, root_dir, vault}`.
-- `ensure_vault(...)`: pick root+name per exposed/isolated mode, then `root_dir.mkdir(parents=True,
-  exist_ok=True)`. Inherently idempotent (no list-then-create). `provider` guard now rejects
-  anything != `"obsidian"`. Signature: `ensure_vault(home, workflow_name, notes_cfg, *,
-  expose_to_obsidian=False, obsidian_root_dir=None) -> NotesBinding`.
-- `clear_vault(...)`: both modes become a **path-confined `rmtree`** of the vault directory,
-  returning whether it existed. Preserve BOTH guards: (1) the resolved dir must be strictly under
-  its base (`is_relative_to`, and `!= base`); (2) in exposed mode the vault name must start with
-  `ATOM_VAULT_PREFIX` (belt-and-suspenders so a personal vault sharing `~/obsidian` is never
-  touched). No `VaultBusyError` (Obsidian doesn't hard-lock; deleting an open vault's folder is
-  safe). Signature drops `runner`; keeps `expose_to_obsidian`, `obsidian_root_dir`, `vault_override`.
-- Module docstring + comments re-grounded on Obsidian.
+### Core: `src/atom/notes.py` (rewrite → validate + resolve)
+- Delete: `clear_vault`, `VaultBusyError`, `_is_busy`, `ATOM_GRAPH_PREFIX`, `resolve_logseq_root`,
+  `_atom_graph_name`, `_list_graph_names`, `notes_root`, the exposed/isolated mode split.
+- Keep a `CLIRunner` seam + `_default_runner` (shells the CLI; `FileNotFoundError` if `obsidian`
+  missing) for testability.
+- `NotesBinding(provider: str, vault: str, root_dir: str)`; `as_prompt_ctx()` →
+  `{"provider","vault","root_dir"}`.
+- `class VaultNotRegisteredError(RuntimeError)` — carries the requested name + the known names.
+- `_list_vaults(run, cli) -> dict[str,str]`: parse `obsidian vaults verbose` (`name\tpath` lines)
+  into a name→path map.
+- `ensure_vault(workflow_name, notes_cfg, *, cli="obsidian", runner=None) -> NotesBinding`:
+  `vault = notes_cfg.vault or workflow_name`; look it up in `_list_vaults`; raise
+  `VaultNotRegisteredError` if absent; else return the binding with the resolved path.
+- Module docstring re-grounded on the CLI + validate-don't-provision model.
 
 ### `src/atom/config/schema.py`
-- `NotesRuntimeConfig`: `expose_to_obsidian: bool = False`, `obsidian_root_dir: Optional[str] = None`,
-  comments rewritten. (Pydantic default stays `False`; shipped `config.yaml` turns it on.)
+- Replace `NotesRuntimeConfig` fields with a single `obsidian_cli: str = "obsidian"`; comments
+  rewritten. (No `expose_*`/`*_root_dir`.)
 
 ### `src/atom/workflow/schema.py`
-- `NotesConfig`: `provider: Literal["obsidian"] = "obsidian"`, rename `graph` → `vault`, docstring
-  updated. *(Breaking: any workflow YAML that set `notes.graph` must rename to `notes.vault`. The
-  shipped `notes-smoke.yaml` doesn't set it.)*
+- `NotesConfig`: `provider: Literal["obsidian"] = "obsidian"`, `graph` → `vault: Optional[str] = None`
+  (defaults at runtime to the workflow name), docstring updated.
 
 ### `src/atom/workflow/engine.py`
-- `ensure_vault(...)` call: kwargs → `expose_to_obsidian=self.cfg.notes.expose_to_obsidian,
-  obsidian_root_dir=self.cfg.notes.obsidian_root_dir`. (No other logic changes; the halt-on-
-  notes-failure path is unchanged.)
+- The `ensure_vault(...)` call → `ensure_vault(workflow.name, workflow.notes, cli=self.cfg.notes.obsidian_cli)`.
+  The surrounding halt-on-failure block is unchanged (now also catches `VaultNotRegisteredError`).
 
-### Prompts
-- `src/atom/prompts/lead_system.md`: retitle `# Persistent notes (Obsidian)`. New body: the vault
-  is a folder of markdown notes at `{{ notes.root_dir }}` (name `{{ notes.vault }}`); work with it
-  using the file tools (`read_file`/`write_file`/`edit_file`/`ls`/`grep`/`glob`); notes are `.md`
-  files, linked with `[[wikilinks]]`, metadata in YAML frontmatter; read prior runs first, record
-  durable notes as you go. **Drop** `load_skill("logseq-cli")`.
-- `src/atom/prompts/subagent_bash.md`: analogous Obsidian rewrite; drop the `logseq` CLI line.
-  (Bash children can also use file tools; mention both `bash` and file tools over the vault dir.)
+### `src/atom/cli.py` and `src/atom/api/app.py`
+- **Remove** the `notes` Typer sub-app / `workflow notes clear` command and the
+  `DELETE /api/workflows/{name}/notes` endpoint (and the now-unused `clear_vault` imports). *(Gated
+  on explicit confirmation.)*
 
-### Small source touch-ups
-- `src/atom/subagent.py:68` — comment: `per-workflow Obsidian vault ctx (root_dir/vault)`.
-- `src/atom/tools/search.py:85` — docstring example `"logseq-cli"` → a neutral example
-  (`"curate-knowledge-base"`).
-- `src/atom/cli.py` — Typer help + confirm text "Logseq vault" → "Obsidian vault"; kwargs renamed;
-  `graph_override` → `vault_override` (reads `.notes.vault`); remove the `VaultBusyError` import and
-  its `except` branch; keep the `has_active_runs` gate; wrap `clear_vault` in a generic OSError
-  guard for filesystem errors.
-- `src/atom/api/app.py` — same treatment for `DELETE /api/workflows/{name}/notes`: docstring,
-  kwargs, `vault_override`, drop `VaultBusyError` handling (keep the 409 active-run guard).
+### Prompts (`lead_system.md`, `subagent_bash.md`)
+- Retitle `# Persistent notes (Obsidian)`. Body: a registered Obsidian vault named `{{ notes.vault }}`
+  (on disk at `{{ notes.root_dir }}`) persists across runs — long-term memory. Reach it with the
+  `obsidian` CLI via `bash`, **always** passing `vault={{ notes.vault }}` (e.g.
+  `obsidian vault={{ notes.vault }} files`, `… read file="<Note>"`,
+  `… append file="<Note>" content="…"`, `… search query="…"`). Run `obsidian help` /
+  `obsidian help <command>` for the full command list. Read what earlier runs left before starting;
+  record durable notes as you go. Drop `load_skill("logseq-cli")`.
 
-### Skill: `skill_library/curate-knowledge-base/` (re-port)
-- **Scripts** (restore the pure-stdlib file-walk versions from `c969e61`, adapted):
-  - `scripts/_vault_ids.py` — restored verbatim (node-id/hidden/collect helpers; already atom-agnostic).
-  - `scripts/find-disconnected-notes.py` — restored, **extended** to also emit `orphans` (no inbound)
-    and `deadends` (no outbound) derived from a directed pass, and `unresolved` (wikilink targets
-    that don't resolve), so the report shape matches what §3 Sense consumes today — replacing the
-    fictional `obsidian orphans/deadends/unresolved` CLI. Takes the **vault directory path** as its
-    arg (the `root_dir` atom passes), not `/mnt/user-data/<NAME>`.
-  - `scripts/find-recently-modified-notes.py` — restored (`--since` mtime + `--since-git` modes).
-  - **Delete** `scripts/find-disconnected-pages.py` (the Logseq/query-fed version).
-- **SKILL.md** — rewrite for Obsidian, keeping the map-reduce methodology (Sense → Partition → Map →
-  Reduce → Verify → Apply → Report → converge) intact. Substrate changes:
-  - Unit of work is an **Obsidian vault**, named `vault=<NAME>` with `root_dir=<PATH>` (the vault
-    directory). No `logseq` CLI anywhere.
-  - §3 Sense: run `<skill_dir>/scripts/find-disconnected-notes.py <root_dir> --json` for
-    islands/isolated/orphans/deadends/unresolved; derive tag/frontmatter stats with `grep`/file
-    tools (no CLI). Incremental mode uses `find-recently-modified-notes.py`.
-  - §5/§7/§11 workers read notes by reading the `.md` file directly (not `logseq show`); no block ids
-    — the offending claim is located by quoted text / heading, and annotations attach inline after
-    the claim (fallback: a `## Curator flags` section).
-  - §8/§9 annotations become Obsidian **`> [!curator]` callouts** written directly into the `.md`
-    file. `[[wikilinks]]` to the other note are **allowed** in callout content (plain markdown — no
-    propagation). **Delete** the entire Logseq apparatus: schema bootstrap (`upsert tag/property`),
-    `curator-*` properties, the "no wikilinks in flag content" warning, the random-ident-suffix
-    warning, and the Datascript enumeration query. Idempotency: enumerate existing flags by grepping
-    the vault for `[!curator]`, match by (host note, other note, type); prune a resolved flag by
-    editing the file to remove that callout block.
-  - `description:` frontmatter re-grounded on Obsidian.
+### `src/atom/subagent.py`, `src/atom/tools/search.py`
+- `subagent.py:68` comment → `per-workflow Obsidian vault ctx (vault/root_dir); bash children only`.
+- `search.py:85` docstring example `"logseq-cli"` → `"curate-knowledge-base"`.
 
-### Config & workflows
-- `config.yaml` — `notes:` block:
-  ```yaml
-  notes:
-    expose_to_obsidian: true   # co-locate each workflow's vault at ~/obsidian/atom.<slug>/ so it's
-                               # easy to open in Obsidian ("Open folder as vault" once, then remembered).
-                               # false -> isolated vaults at ~/.atom/notes/<slug>/ (never surfaced).
-    # obsidian_root_dir: ~/obsidian   # override only if your Obsidian vaults live elsewhere
-  ```
-- `workflows/notes-smoke.yaml` — rewrite both tasks to use file tools on the vault dir (no
-  `load_skill("logseq-cli")`): "list every note already in this workflow's Obsidian vault …";
-  "append a new dated note `{{ entry }} ({{ date }})` … confirm by listing again". Two-run
-  recall/record semantics preserved.
+### Skill: `skill_library/curate-knowledge-base/`
+- **Scripts:** restore `_vault_ids.py` and `find-disconnected-notes.py` (islands/isolated only — no
+  need to derive orphans/deadends; the CLI provides those) and `find-recently-modified-notes.py`
+  (incremental `--since`/`--since-git`; the CLI has no "modified since"). All run on the vault
+  **path** (`root_dir`). Delete `find-disconnected-pages.py`.
+- **SKILL.md:** re-port to the real `obsidian` CLI (keep the map-reduce methodology). Substrate:
+  - Unit of work = a registered Obsidian vault named `vault=<NAME>` (with `root_dir=<PATH>` for the
+    island script). Every `obsidian` call carries `vault=<NAME>`. No default vault → STOP.
+  - §3 Sense: `obsidian vault=<N> orphans|deadends|unresolved|tags counts|properties counts|files`
+    for terrain; `python3 <skill_dir>/scripts/find-disconnected-notes.py <root_dir> --json` for
+    multi-note islands (the one thing the CLI can't do). Incremental via
+    `find-recently-modified-notes.py`.
+  - §5/§7/§11 workers read notes with `obsidian vault=<N> read file="<Note>"` and edges with
+    `links`/`backlinks`. No block ids — locate a claim by quoted text/heading.
+  - §8/§9 annotations: append an Obsidian `> [!curator]` callout to the note
+    (`obsidian vault=<N> append file="<Note>" content='> [!curator] …'`), plus a machine-readable
+    `property:set` flag (e.g. `curator-flag`); `[[wikilinks]]` in callout content are fine (plain
+    markdown — no propagation). Delete the entire Logseq apparatus (Datascript, `upsert`, schema
+    bootstrap, propagation/ident warnings). Idempotency: enumerate flags with
+    `obsidian vault=<N> search query="[!curator]" format=json`; prune a resolved flag by
+    `read`→edit→`create overwrite`.
+  - Keep all §12 invariants (vault-from-prompt, earned edits only, detect-and-flag-never-adjudicate,
+    dual-channel, no vault logs, convergence, unattended).
 
-### `README.md`
-- Rewrite the persistent-notes section. **Remove** the "the `logseq` CLI must be installed"
-  prerequisite entirely (net win: no external dependency — vaults are plain markdown). Document
-  `expose_to_obsidian` (co-locate at `~/obsidian/atom.<slug>`, open once) and the notes-smoke flow.
+### Config & fixtures
+- `config.yaml` `notes:` block → `obsidian_cli: obsidian` (+ explanatory comment). No expose/root.
+- `workflows/notes-smoke.yaml`: set `notes.vault: <a registered vault>`; tasks use
+  `obsidian vault=… files|append` (no `load_skill`). Document that the named vault must be
+  registered. Run twice to see recall.
+- `README.md`: rewrite the persistent-notes section. Prerequisite becomes: the `obsidian` CLI on
+  PATH + the named vault registered in Obsidian (app running during runs). Remove the `logseq`
+  prerequisite.
 
-### Tests (port all; keep the suite green)
-- `tests/test_notes.py` (26) — rewrite filesystem-based (no fake CLI runner): isolated `ensure_vault`
-  creates `$ATOM_HOME/notes/<slug>`; exposed creates `~/obsidian/atom.<slug>`; idempotent second
-  call; binding fields (`provider="obsidian"`, `root_dir`, `vault`); `resolve_obsidian_root`
-  override/env/default; `_atom_vault_name`; `clear_vault` isolated + exposed rmtree with both guards
-  (refuse outside base; refuse non-`atom.` name); returns `False` when absent. Drop all
-  `VaultBusyError` tests.
-- `tests/test_config.py` (5) — `expose_to_obsidian` / `obsidian_root_dir` fields + defaults.
-- `tests/test_workflow_schema.py` (1) — provider literal `"obsidian"`, `vault` field.
-- `tests/test_prompts.py` (10) — notes ctx uses `vault` not `graph`, provider `"obsidian"`, the
-  Obsidian notes block renders; rename the incidental `logseq-cli` example skill.
-- `tests/test_search.py` (9) — rename the incidental `logseq-cli` fake skill to a neutral name.
-- `tests/test_subagent.py` (4) — notes ctx `vault`; comment.
-- `tests/test_workflow_engine.py` (4) — `ensure_vault` kwargs; provider.
-- `tests/test_workflow_cli.py` (4) / `tests/test_workflow_api.py` (2) — Obsidian wording, kwargs,
-  no `VaultBusyError`; `has_active_runs` gate retained.
-- `tests/test_library.py` (4) — rename incidental `logseq` skill names.
-- `tests/test_curate_disconnected_pages.py` → **rename** `tests/test_curate_disconnected_notes.py`:
-  build a tmp vault of `.md` files with `[[wikilinks]]`, assert islands/isolated/orphans/deadends/
-  main_component from `find-disconnected-notes.py`; add coverage for `find-recently-modified-notes.py`
-  (`--since` mtime + `--since-git`).
+### Tests
+- `tests/test_notes.py` — rewrite around a fake CLI runner: `ensure_vault` resolves a registered
+  vault to its path; unknown vault raises `VaultNotRegisteredError`; `vault` defaults to the
+  workflow name; provider guard. (No clear/VaultBusy tests.)
+- `tests/test_config.py` — `NotesRuntimeConfig.obsidian_cli` default; old fields gone.
+- `tests/test_workflow_schema.py` — provider `"obsidian"`, `vault` field.
+- `tests/test_workflow_engine.py` — `ensure_vault` called with the CLI; halt on unregistered vault.
+- `tests/test_workflow_cli.py`, `tests/test_workflow_api.py` — **remove** the notes-clear cases.
+- `tests/test_prompts.py`, `tests/test_subagent.py` — notes ctx uses `vault`+`root_dir`, provider
+  `obsidian`, the `obsidian` CLI block renders; rename incidental `logseq-cli` fixtures.
+- `tests/test_search.py`, `tests/test_library.py` — rename incidental `logseq-cli` fixtures.
+- `tests/test_curate_disconnected_pages.py` → `tests/test_curate_disconnected_notes.py` — islands
+  from the file-walk script over a tmp vault of `.md` files.
 
-## 6. Legacy data (clean cutover)
+## 6. Notes on the user's environment (design inputs)
+- Duplicate registered names exist (`knowledge` ×2). `vault=<name>` is then ambiguous — recommend
+  unique vault names; validation surfaces the ambiguity if a named vault matches >1 path.
+- Vaults live inside git repos, so curate-kb's `--since-git` incremental mode is directly useful.
 
-Existing Logseq graphs are **not** auto-migrated (the notes are per-workflow scratch memory, and
-Logseq is being dropped). After the cutover:
-- Exposed Logseq graphs under `~/logseq/atom.*` are orphaned; the user can remove them via the
-  Logseq app or delete the folders.
-- Isolated dirs under `$ATOM_HOME/notes/<slug>/` may contain Logseq artifacts; a fresh Obsidian run
-  simply won't find markdown there. Safe to delete stale ones. Documented, not automated.
+## 7. Non-goals
+- Writing `obsidian.json` / auto-registering vaults / restarting the app.
+- A no-app "headless" path (the app is guaranteed running during workflows).
+- Converting existing Logseq vault content.
 
-## 7. Non-goals / out of scope
-
-- Auto-registration in `obsidian.json` (Option B) — deferred.
-- Converting existing Logseq vault *content* into Obsidian markdown.
-- Any `obsidian` CLI — none exists; file tools + the file-walk scripts are the whole surface.
-- Expanding notes context to the general (non-bash) subagent — unchanged from today.
-
-## 8. Verification plan
-
-- `pytest` full suite green (baseline 565).
-- Manual smoke: run `notes-smoke` twice; second run's Recall sees the first run's note. Confirm the
-  vault materializes at `~/obsidian/atom.notes-smoke/` and opens in Obsidian.
-- curate-kb: `find-disconnected-notes.py` / `find-recently-modified-notes.py` covered by unit tests;
-  SKILL.md is reviewed prose (no runner).
+## 8. Verification
+- `pytest` full suite green.
+- Manual: register a scratch vault, point `notes-smoke.vault` at it, run twice; second Recall sees
+  the first run's note (via `obsidian vault=… read`). Confirm an unregistered name halts the run
+  cleanly.
+- curate-kb scripts unit-tested; SKILL.md reviewed prose.
 
 ## 9. Risks
-
-- **`root_dir` semantic flip** (parent-home → vault-dir) touches the prompt contract and every notes
-  test — the largest single source of churn; mitigated by the exact file map above.
-- **Renamed config keys** (`expose_to_obsidian`, `obsidian_root_dir`) and the workflow field
-  (`graph`→`vault`) are breaking for any hand-written config/YAML — acceptable for a clean cutover;
-  called out in README.
-- **curate-kb SKILL.md is prose**, not executable — correctness is by review, not tests. The
-  executable risk (the scripts) is unit-tested.
+- **Feature removal (`notes clear`)** — behavior change; gated on confirmation.
+- **`notes.vault` now required-ish** (defaults to workflow name, which must be a registered vault) —
+  breaking for any notes workflow relying on auto-provisioning; documented.
+- **Ambiguous duplicate vault names** — surfaced by validation, not silently resolved.
+- **curate-kb SKILL.md is prose** — correctness by review; the scripts are unit-tested.
