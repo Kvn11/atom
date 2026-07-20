@@ -527,8 +527,9 @@ function FilesTray({ files, onOpen }: { files: Artifact[]; onOpen: (a: Artifact)
 // Focused overlay for one presented file, portalled to <body> so its blurred backdrop covers the
 // whole view. Renders nothing when `art` is null (closed, or the file dropped out of the run).
 // Body mirrors the Deliverables viewer's flex column so ArtifactBody's `flex:1` children (pdf/code)
-// fill and scroll internally. Esc / backdrop-click / ✕ close; focus is trapped-in on open and
-// restored on close; body scroll is locked while open.
+// fill and scroll internally. Esc / backdrop-click / ✕ close; focus moves to the close button on
+// open and is restored on close (no focus trap; `aria-modal` marks the rest inert to AT); body
+// scroll is locked while open.
 function FileModal(
   { runId, art, onClose }: { runId: string; art: Artifact | null; onClose: () => void },
 ) {
