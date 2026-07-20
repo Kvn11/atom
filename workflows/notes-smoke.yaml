@@ -1,33 +1,34 @@
 # workflows/notes-smoke.yaml — copy to $ATOM_HOME/workflows/ to run it.
-# Persistent-notes smoke test: recall prior entries, then record a new one.
-# Run it TWICE — the second run's "Recall" step should see the first run's entry.
+# Persistent-notes smoke test. Point notes.vault at a vault you have REGISTERED in Obsidian
+# ("Open folder as vault"). Run it TWICE — the second run's "Recall" step should see the first
+# run's note.
 name: notes-smoke
-description: Smoke-test persistent notes — recall prior entries in the shared Logseq vault, then record a new one.
+description: Smoke-test persistent notes — recall prior notes in a registered Obsidian vault, then record a new one.
 notes:
   enabled: true
+  vault: notes-smoke          # <-- must match a vault registered in Obsidian
 inputs:
   - name: entry
     required: false
     default: "hello from a notes-smoke run"
 steps:
   - title: Recall
-    description: Read what earlier runs left in the persistent vault.
+    description: Read what earlier runs left in the vault.
     tasks:
       - id: recall
         prompt: >
-          Load the logseq-cli skill, then list every task already recorded in this workflow's
-          persistent Logseq vault and report how many exist and what they say. If none exist yet,
-          say so plainly.
+          Using the obsidian CLI (always pass vault=notes-smoke), list the vault's files and read
+          any note this workflow created before; report how many exist and what they say. If none
+          exist yet, say so plainly.
         model: haiku
         thinking: low
   - title: Record
-    description: Append a new dated entry, then confirm it persisted.
+    description: Append a dated note, then confirm it persisted.
     tasks:
       - id: record
         prompt: >
-          Load the logseq-cli skill, then append a new dated task to this workflow's persistent
-          Logseq vault with the content "{{ entry }} ({{ date }})". Confirm by listing tasks again,
-          then write a one-line confirmation to {{ outputs }}/notes-confirmation.md and call
-          present_files on it.
+          Using the obsidian CLI (always pass vault=notes-smoke), create or append a dated note with
+          the content "{{ entry }} ({{ date }})". Confirm by reading it back, then write a one-line
+          confirmation to {{ outputs }}/notes-confirmation.md and call present_files on it.
         model: haiku
         thinking: low

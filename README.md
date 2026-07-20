@@ -20,8 +20,10 @@ cp .env.example .env               # add the API key(s) you have
 Set the key for whatever model you run — e.g. `ANTHROPIC_API_KEY` for the default Claude Haiku.
 (Providers: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY`, `DASHSCOPE_API_KEY`.)
 
-**Prerequisites for persistent-notes workflows:** the `logseq` CLI must be installed and on your
-`PATH` (guaranteed on target devices). Verify with `logseq --version`.
+**Prerequisites for persistent-notes workflows:** the `obsidian` CLI must be on your `PATH`
+(guaranteed on target devices; verify with `obsidian version`), the Obsidian app must be running
+during runs, and the vault named by the workflow must already be **registered** in Obsidian
+(`obsidian vaults` lists the known ones).
 
 ## Use
 
@@ -76,22 +78,21 @@ persists across runs:
 
 ```yaml
 notes:
-  enabled: true          # provisions a per-workflow Logseq vault, shared by every run
-  # graph: my-graph      # optional; defaults to the slugified workflow name
+  enabled: true          # bind a registered Obsidian vault to this workflow, shared by every run
+  vault: my-vault        # the Obsidian vault name; defaults to the workflow name
 ```
 
-When enabled, atom provisions a Logseq graph for the workflow (once, reused across runs) and injects
-a snippet into each task's system prompt telling the agent where the vault is and to
-`load_skill("logseq-cli")` for the CLI commands. Try it with `workflows/notes-smoke.yaml` (run it
-twice — the second run recalls the first run's entry).
+The vault is an ordinary Obsidian vault — a folder of markdown notes you have **registered** in
+Obsidian (once, via "Open folder as vault"). atom does **not** create, register, or delete vaults:
+when a notes-enabled run starts, atom validates that `notes.vault` (defaulting to the workflow name)
+is a registered vault via `obsidian vaults`, resolves its path, and injects a snippet into each
+task's system prompt telling the agent to reach it with the `obsidian` CLI — always passing
+`vault=<name>` (e.g. `obsidian vault=<name> read file="<Note>"`, `... append file="<Note>"
+content="..."`). If the named vault isn't registered, the run **halts cleanly** and tells you to
+open it in Obsidian first. The Obsidian app must be running during a run (the CLI bridges to it).
 
-By default (`notes.expose_to_logseq: true` in `config.yaml`) the vault is provisioned **inside your
-Logseq desktop app's graph home** as `atom.<workflow-slug>`, so it shows up in the app's graph
-switcher with no manual export — a **new** vault appears the next time you launch Logseq, and writes
-to an already-open graph appear live. Set `notes.expose_to_logseq: false` to keep vaults isolated
-at `$ATOM_HOME/notes/<slug>/` (invisible to the GUI) for headless/remote deployments; use
-`notes.logseq_root_dir` only if your app's graph home isn't `~/logseq`. This co-location assumes
-atom and Logseq share one host (Phase-1); it does not apply to the future Docker sandbox.
+Try it with `workflows/notes-smoke.yaml`: register a vault named `notes-smoke` in Obsidian, then run
+the workflow twice — the second run's Recall step reads the first run's note.
 
 ### File inputs
 
