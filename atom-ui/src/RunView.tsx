@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
@@ -87,6 +88,14 @@ export function RunView({ runId, onBack, onOpenRun }:
   const [sel, setSel] = useState<Sel | null>(null);
   const [tab, setTab] = useState<"transcript" | "deliverables">("transcript");
   const [openArt, setOpenArt] = useState<Artifact | null>(null);
+  const [modalRel, setModalRel] = useState<string | null>(null);
+  const closeModal = useCallback(() => setModalRel(null), []);
+  // Re-derive the live artifact from the latest poll by stable `rel`. If the file drops out of the
+  // list (run cleaned up), this becomes null and <FileModal> closes itself.
+  const modalArt = useMemo(
+    () => (modalRel ? arts.find((a) => a.rel === modalRel) ?? null : null),
+    [modalRel, arts],
+  );
   const [exporting, setExporting] = useState<"run" | "task" | null>(null);
   const [exportMsg, setExportMsg] = useState<{ text: string; kind: "ok" | "warn" | "err"; href?: string } | null>(null);
   const [improving, setImproving] = useState(false);
@@ -118,6 +127,9 @@ export function RunView({ runId, onBack, onOpenRun }:
     const pick = running ?? flat[0];
     if (pick) setSel({ step: pick.step, task: pick.task });
   }, [manifest, sel]);
+
+  // The tray belongs to the selected task — close any open file when the task or run changes.
+  useEffect(() => { setModalRel(null); }, [runId, sel?.step, sel?.task]);
 
   const doneSteps = manifest ? manifest.steps.filter((s) => s.status === "complete").length : 0;
   const curStep = manifest
@@ -309,11 +321,12 @@ export function RunView({ runId, onBack, onOpenRun }:
             </div>
             {tab === "transcript"
               ? <Transcript runId={runId} sel={sel} status={manifest.status} taskStatus={selTask?.status}
-                  arts={arts} onOpenArtifact={(a) => { setOpenArt(a); setTab("deliverables"); }} />
+                  arts={arts} onOpenModal={(a) => setModalRel(a.rel)} />
               : <Deliverables runId={runId} arts={arts} open={openArt} setOpen={setOpenArt} />}
           </section>
         </div>
       )}
+      <FileModal runId={runId} art={modalArt} onClose={closeModal} />
     </div>
   );
 }
@@ -358,9 +371,9 @@ function HaltBanner(
 }
 
 function Transcript(
-  { runId, sel, status, taskStatus, arts, onOpenArtifact }:
+  { runId, sel, status, taskStatus, arts, onOpenModal }:
   { runId: string; sel: Sel | null; status: string; taskStatus?: string;
-    arts: Artifact[]; onOpenArtifact: (a: Artifact) => void },
+    arts: Artifact[]; onOpenModal: (a: Artifact) => void },
 ) {
   const [chat, setChat] = useState<ChatMsg[]>([]);
   const [pending, setPending] = useState(false);
@@ -416,7 +429,7 @@ function Transcript(
             })}
             <GeneratingIndicator streaming={streaming} lastEventAt={lastEventAt} />
           </div>
-          <FilesTray files={presented} onOpen={onOpenArtifact} />
+          <FilesTray files={presented} onOpen={onOpenModal} />
         </div>
         {rail}
       </div>
@@ -449,7 +462,7 @@ function Transcript(
             </div>
           ))}
         </div>
-        <FilesTray files={presented} onOpen={onOpenArtifact} />
+        <FilesTray files={presented} onOpen={onOpenModal} />
       </div>
       {rail}
     </div>
@@ -511,6 +524,54 @@ function FilesTray({ files, onOpen }: { files: Artifact[]; onOpen: (a: Artifact)
   );
 }
 
+// Focused overlay for one presented file, portalled to <body> so its blurred backdrop covers the
+// whole view. Renders nothing when `art` is null (closed, or the file dropped out of the run).
+// Body mirrors the Deliverables viewer's flex column so ArtifactBody's `flex:1` children (pdf/code)
+// fill and scroll internally. Esc / backdrop-click / ✕ close; focus is trapped-in on open and
+// restored on close; body scroll is locked while open.
+function FileModal(
+  { runId, art, onClose }: { runId: string; art: Artifact | null; onClose: () => void },
+) {
+  const closeRef = useRef<HTMLButtonElement | null>(null);
+  const rel = art?.rel ?? null;   // keyed on rel so the 1.5s poll (new object, same file) is inert
+  useEffect(() => {
+    if (!rel) return;
+    const prevFocus = document.activeElement as HTMLElement | null;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", onKey);
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    closeRef.current?.focus();
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prevOverflow;
+      prevFocus?.focus?.();          // best-effort: return focus to the triggering chip
+    };
+  }, [rel, onClose]);
+
+  if (!art) return null;
+  const raw = artifactUrl(runId, art.rel);
+  return createPortal(
+    <div className="file-modal-backdrop" onClick={onClose}>
+      <div className="file-modal" role="dialog" aria-modal="true" aria-label={art.name}
+        onClick={(e) => e.stopPropagation()}>
+        <div className="file-modal-head">
+          <span className="file-modal-name">{art.name}</span>
+          <span className="file-modal-path dim" title={art.path}>{art.path}</span>
+          <span className="file-modal-size dim">{fmtSize(art.size)}</span>
+          <a className="btn-sm" href={raw} download>Download</a>
+          <button ref={closeRef} className="file-modal-x" onClick={onClose}
+            title="Close (Esc)" aria-label="Close">✕</button>
+        </div>
+        <div className="file-modal-body">
+          <ArtifactBody runId={runId} art={art} />
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 function Deliverables(
   { runId, arts, open, setOpen }:
   { runId: string; arts: Artifact[]; open: Artifact | null; setOpen: (a: Artifact | null) => void },
@@ -549,7 +610,9 @@ function ArtifactBody({ runId, art }: { runId: string; art: Artifact }) {
   const tooBig = art.size > MAX_INLINE;
   const [text, setText] = useState<string | null>(null);
   const [err, setErr] = useState("");
+  const [mediaErr, setMediaErr] = useState(false);
   useEffect(() => {
+    setMediaErr(false);
     if (isImg || isPdf || tooBig) return;             // images/pdf stream via <img>/<iframe>; huge files aren't inlined
     let live = true;
     setText(null); setErr("");
@@ -557,8 +620,9 @@ function ArtifactBody({ runId, art }: { runId: string; art: Artifact }) {
     return () => { live = false; };
   }, [runId, art.rel, isImg, isPdf, tooBig]);
 
-  if (isImg) return <div className="art-img"><img src={raw} alt={art.name} /></div>;
-  if (isPdf) return <iframe className="art-pdf" src={raw} title={art.name} />;
+  if (mediaErr) return <div className="error">This file could not be loaded — it may have been moved or deleted.</div>;
+  if (isImg) return <div className="art-img"><img src={raw} alt={art.name} onError={() => setMediaErr(true)} /></div>;
+  if (isPdf) return <iframe className="art-pdf" src={raw} title={art.name} onError={() => setMediaErr(true)} />;
   if (tooBig) return <DownloadCard art={art} href={raw} note={`Large file (${fmtSize(art.size)}) — not shown inline.`} />;
   if (err) return <div className="error">{err}</div>;
   if (text === null) return <div className="placeholder">Loading…</div>;

@@ -249,6 +249,35 @@ table.runs tbody tr:last-child td { border-bottom: 0; }
 .art-img img { max-width: 100%; height: auto; border-radius: var(--radius-sm); box-shadow: var(--shadow); }
 .art-md { max-width: 780px; margin: 0 auto; }
 
+/* Focused file modal — portalled to <body>; blurred, dimmed backdrop; body mirrors .viewer's
+   flex column so ArtifactBody's flex:1 children (pdf/code/md/img) fill and scroll internally. */
+.file-modal-backdrop {
+  position: fixed; inset: 0; z-index: 100;
+  display: flex; align-items: center; justify-content: center; padding: 4vh 4vw;
+  background: rgba(28, 25, 23, .38);
+  backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+}
+.file-modal {
+  display: flex; flex-direction: column; overflow: hidden;
+  width: min(920px, 92vw); max-height: 88vh;
+  background: var(--surface); border: 1px solid var(--border-strong);
+  border-radius: var(--radius); box-shadow: 0 12px 40px rgba(28, 25, 23, .28);
+}
+.file-modal-head { display: flex; align-items: center; gap: 12px; padding: 11px 16px; border-bottom: 1px solid var(--border); }
+.file-modal-name { font-weight: 600; font-size: 14px; white-space: nowrap; }
+.file-modal-path { flex: 1; min-width: 0; font-family: var(--mono); font-size: 12px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-modal-size { flex: 0 0 auto; font-size: 12.5px; }
+.file-modal-head a.btn-sm { text-decoration: none; display: inline-flex; align-items: center; }
+.file-modal-x { border: 0; background: transparent; color: var(--ink-2);
+  font-size: 15px; line-height: 1; padding: 4px 8px; border-radius: var(--radius-sm); cursor: pointer; }
+.file-modal-x:hover { background: var(--surface-2); color: var(--ink); }
+.file-modal-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+@media (prefers-reduced-motion: no-preference) {
+  .file-modal { animation: file-modal-in .12s ease-out; }
+  @keyframes file-modal-in { from { transform: translateY(6px); opacity: .6; } to { transform: none; opacity: 1; } }
+}
+
 /* Shared markdown typography — deliverable bodies (.art-md.md), assistant transcript messages
    (.msg-text.md), and presented-file columns all carry .md so they render identically. */
 .md > :first-child { margin-top: 0; }
