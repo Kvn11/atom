@@ -127,17 +127,10 @@ class TodosConfig(_Base):
 
 
 class NotesRuntimeConfig(_Base):
-    # Surface each workflow's Logseq vault directly in the desktop app's graph home so it appears
-    # in the graph switcher with no manual export. When True, a workflow's vault is provisioned as
-    # `atom.<slug>` under `logseq_root_dir` (the app's home). When False, the vault stays isolated
-    # at $ATOM_HOME/notes/<slug>/ (invisible to the GUI) — the legacy behavior. The Pydantic
-    # default is False so programmatic/embedded configs stay isolated; the shipped config.yaml
-    # turns it on for the normal desktop deployment.
-    expose_to_logseq: bool = False
-    # The desktop app's graph home (the --root-dir whose graphs/ the app scans). None ->
-    # $LOGSEQ_GRAPHS_DIR's parent, else ~/logseq. Must equal the app's actual home, or the
-    # shared-db-worker safety is bypassed. Set this only if the app uses a non-default home.
-    logseq_root_dir: Optional[str] = None
+    # Persistent notes are backed by Obsidian vaults reached through the device `obsidian` CLI
+    # (a bridge to the running Obsidian app). A workflow NAMES a registered vault (notes.vault);
+    # atom validates the name is known and never creates/registers/deletes vaults.
+    obsidian_cli: str = "obsidian"   # CLI binary name/path (override for a non-PATH install)
 
 
 class LangfuseConfig(_Base):

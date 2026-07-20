@@ -106,30 +106,6 @@ def create_app(cfg: AtomConfig | None = None, engine: WorkflowEngine | None = No
         except FileNotFoundError:
             raise HTTPException(404, f"workflow '{name}' not found")
 
-    @app.delete("/api/workflows/{name}/notes")
-    def clear_workflow_notes(name: str) -> dict:
-        """Delete a workflow's persistent Logseq vault (re-provisioned on its next run)."""
-        from atom.notes import VaultBusyError, clear_vault
-
-        try:
-            graph_override = load_workflow(name, cfg.home).notes.graph
-        except FileNotFoundError:
-            raise HTTPException(404, f"workflow '{name}' not found")
-        except Exception:  # noqa: BLE001 — a malformed-but-present def must not block clearing (parity with the CLI)
-            graph_override = None
-        if engine.store.has_active_runs(name):
-            raise HTTPException(409, f"workflow '{name}' has an active run; cannot clear notes")
-        try:
-            cleared = clear_vault(
-                cfg.home, name,
-                expose_to_logseq=cfg.notes.expose_to_logseq,
-                logseq_root_dir=cfg.notes.logseq_root_dir,
-                graph_override=graph_override,
-            )
-        except VaultBusyError as exc:
-            raise HTTPException(409, str(exc))
-        return {"workflow": name, "cleared": cleared}
-
     def _create_and_enqueue(wf, inputs: dict, files: dict) -> dict:
         # files: {input_name: (original_filename, data_bytes)}
         run_id = uuid.uuid4().hex[:12]
