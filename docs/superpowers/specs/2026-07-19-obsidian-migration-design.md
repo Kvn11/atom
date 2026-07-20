@@ -1,7 +1,7 @@
 # Migrate persistent-notes backbone: Logseq → Obsidian (device `obsidian` CLI)
 
 **Date:** 2026-07-19 (revised 2026-07-20 after discovering the device `obsidian` CLI)
-**Status:** Design — model chosen (Option A); notes-clear removal awaiting explicit OK
+**Status:** Implemented on `feat/obsidian-migration` (534 tests green; verified end-to-end against the real `obsidian` CLI). notes-clear removal shipped — flagged for review.
 **Branch:** `feat/obsidian-migration`
 
 ## 1. Goal
