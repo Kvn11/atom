@@ -72,25 +72,6 @@ function Markdown({ children }: { children: string }) {
 
 type Sel = { step: number; task: string };
 
-// The most-recently presented file set for a task: the last present_files call's `filepaths`,
-// resolved to this task's captured artifacts by virtual `path` (capture preserves `path` even when
-// basenames collide, so joining on it — not `name` — is exact). Missing/unmatched paths drop out.
-function presentedSetFor(chat: ChatMsg[], arts: Artifact[], sel: Sel | null): Artifact[] {
-  if (!sel) return [];
-  const taskArts = arts.filter((a) => a.step === sel.step && a.task === sel.task);
-  if (!taskArts.length) return [];
-  const byPath = new Map(taskArts.map((a) => [a.path, a]));
-  let last: string[] | null = null;
-  for (const m of chat) {
-    for (const c of m.tool_calls ?? []) {
-      if (c.name !== "present_files") continue;
-      const fps = c.args?.filepaths;
-      if (Array.isArray(fps)) last = fps.filter((x): x is string => typeof x === "string");
-    }
-  }
-  return last ? last.map((p) => byPath.get(p)).filter((a): a is Artifact => !!a) : [];
-}
-
 function argSummary(args?: Record<string, unknown>): string {
   if (!args) return "";
   const a = args as Record<string, unknown>;
@@ -384,12 +365,14 @@ function Transcript(
   const [chat, setChat] = useState<ChatMsg[]>([]);
   const [pending, setPending] = useState(false);
   const { blocks, streaming, lastEventAt } = useTaskStream(runId, sel, taskStatus);
-  const presented = useMemo(() => presentedSetFor(chat, arts, sel), [chat, arts, sel]);
+  const presented = useMemo(
+    () => arts.filter((a) => !!sel && a.step === sel.step && a.task === sel.task),
+    [arts, sel],
+  );
   const plan = currentPlan(blocks, chat, streaming);
-  const rail = (plan.length || presented.length) ? (
+  const rail = plan.length ? (
     <div className="transcript-rail">
-      {plan.length > 0 && <PlanPanel todos={plan} />}
-      {presented.length > 0 && <PresentedPanel runId={runId} files={presented} onOpen={onOpenArtifact} />}
+      <PlanPanel todos={plan} />
     </div>
   ) : null;
 
@@ -412,25 +395,28 @@ function Transcript(
   if (streaming || (blocks.length && !chat.length)) {
     return (
       <div className="transcript-split">
-        <div className="transcript">
-          {blocks.map((b, i) => {
-            const isLast = i === blocks.length - 1;
-            if (b.kind === "thinking")
-              return <div key={i} className="msg thinking"><div className="msg-role">thinking</div>
-                <div className="msg-text think">{b.text}{isLast && <span className="caret" />}</div></div>;
-            if (b.kind === "text")
-              return <div key={i} className="msg ai"><div className="msg-role">assistant</div>
-                <div className="msg-text">{b.text}{isLast && <span className="caret" />}</div></div>;
-            if (b.kind === "tool_call")
-              return <div key={i} className="msg tool-calls">
-                <div className={`toolcall${b.name === "present_files" ? " present" : ""}`}>
-                  <span className="tc-name">→ {b.name}</span>
-                  <span className="tc-args">{argSummary(b.args)}</span></div></div>;
-            return <div key={i} className={`msg tool${b.isError ? " err" : ""}`}>
-              <div className="msg-role">{b.name || "tool"}</div>
-              <div className="msg-text">{b.text}</div></div>;
-          })}
-          <GeneratingIndicator streaming={streaming} lastEventAt={lastEventAt} />
+        <div className="transcript-main">
+          <div className="transcript">
+            {blocks.map((b, i) => {
+              const isLast = i === blocks.length - 1;
+              if (b.kind === "thinking")
+                return <div key={i} className="msg thinking"><div className="msg-role">thinking</div>
+                  <div className="msg-text think">{b.text}{isLast && <span className="caret" />}</div></div>;
+              if (b.kind === "text")
+                return <div key={i} className="msg ai"><div className="msg-role">assistant</div>
+                  <div className="msg-text">{b.text}{isLast && <span className="caret" />}</div></div>;
+              if (b.kind === "tool_call")
+                return <div key={i} className="msg tool-calls">
+                  <div className={`toolcall${b.name === "present_files" ? " present" : ""}`}>
+                    <span className="tc-name">→ {b.name}</span>
+                    <span className="tc-args">{argSummary(b.args)}</span></div></div>;
+              return <div key={i} className={`msg tool${b.isError ? " err" : ""}`}>
+                <div className="msg-role">{b.name || "tool"}</div>
+                <div className="msg-text">{b.text}</div></div>;
+            })}
+            <GeneratingIndicator streaming={streaming} lastEventAt={lastEventAt} />
+          </div>
+          <FilesTray files={presented} onOpen={onOpenArtifact} />
         </div>
         {rail}
       </div>
@@ -442,25 +428,28 @@ function Transcript(
 
   return (
     <div className="transcript-split">
-      <div className="transcript">
-        {chat.map((m, i) => m.tool_calls?.length ? (
-          <div key={i} className="msg tool-calls">
-            {m.text && <div className="msg-text md"><Markdown>{m.text}</Markdown></div>}
-            {m.tool_calls.map((c, k) => (
-              <div key={k} className={`toolcall${c.name === "present_files" ? " present" : ""}`}>
-                <span className="tc-name">{c.name === "present_files" ? "⇪ present_files" : `→ ${c.name}`}</span>
-                <span className="tc-args">{argSummary(c.args)}</span>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div key={i} className={`msg ${m.role}`}>
-            <div className="msg-role">{m.name || m.role}</div>
-            {m.role === "ai"
-              ? <div className="msg-text md"><Markdown>{m.text}</Markdown></div>
-              : <div className="msg-text">{m.text}</div>}
-          </div>
-        ))}
+      <div className="transcript-main">
+        <div className="transcript">
+          {chat.map((m, i) => m.tool_calls?.length ? (
+            <div key={i} className="msg tool-calls">
+              {m.text && <div className="msg-text md"><Markdown>{m.text}</Markdown></div>}
+              {m.tool_calls.map((c, k) => (
+                <div key={k} className={`toolcall${c.name === "present_files" ? " present" : ""}`}>
+                  <span className="tc-name">{c.name === "present_files" ? "⇪ present_files" : `→ ${c.name}`}</span>
+                  <span className="tc-args">{argSummary(c.args)}</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div key={i} className={`msg ${m.role}`}>
+              <div className="msg-role">{m.name || m.role}</div>
+              {m.role === "ai"
+                ? <div className="msg-text md"><Markdown>{m.text}</Markdown></div>
+                : <div className="msg-text">{m.text}</div>}
+            </div>
+          ))}
+        </div>
+        <FilesTray files={presented} onOpen={onOpenArtifact} />
       </div>
       {rail}
     </div>
@@ -490,35 +479,35 @@ function PlanPanel({ todos }: { todos: Todo[] }) {
   );
 }
 
-// Renders the files from a task's most-recent present_files call beside the transcript, each in its
-// own column using the same rich renderer as Deliverables. Other (non-presented) files live in the
-// Deliverables tab; a per-file button opens that file there full-size.
-function PresentedPanel(
-  { runId, files, onOpen }:
-  { runId: string; files: Artifact[]; onOpen: (a: Artifact) => void },
-) {
+// Emoji glyph for a presented file, by extension family (purely decorative; aria-hidden).
+function fileGlyph(name: string): string {
+  if (IMG.test(name)) return "🖼";
+  if (PDF.test(name)) return "📕";
+  if (MD.test(name)) return "📝";
+  return "📄";
+}
+
+// Sticky strip of the selected task's presented deliverables, pinned to the bottom of the
+// transcript pane. Renders nothing when the task has presented nothing (e.g. still running).
+// Each chip opens the file via `onOpen`.
+function FilesTray({ files, onOpen }: { files: Artifact[]; onOpen: (a: Artifact) => void }) {
+  if (!files.length) return null;
   return (
-    <aside className="present-panel">
-      <div className="present-panel-head">
-        <span className="pp-title">Presented files</span>
-        <span className="pp-count">{files.length}</span>
-        <span className="pp-hint">Other files → Deliverables tab</span>
+    <div className="files-tray">
+      <div className="files-tray-head">
+        <span className="ft-title">Presented files</span>
+        <span className="ft-count">{files.length}</span>
       </div>
-      <div className="present-panel-body">
+      <div className="files-tray-strip">
         {files.map((a) => (
-          <div key={a.rel} className="pf-file">
-            <div className="pf-file-head">
-              <span className="pf-name" title={a.path}>{a.name}</span>
-              <span className="pf-size">{fmtSize(a.size)}</span>
-              <button className="pf-open" title="Open in Deliverables" onClick={() => onOpen(a)}>⤢</button>
-            </div>
-            <div className="pf-file-body">
-              <ArtifactBody runId={runId} art={a} />
-            </div>
-          </div>
+          <button key={a.rel} className="ft-chip" onClick={() => onOpen(a)} title={a.path}>
+            <span className="ft-glyph" aria-hidden="true">{fileGlyph(a.name)}</span>
+            <span className="ft-name">{a.name}</span>
+            <span className="ft-size">{fmtSize(a.size)}</span>
+          </button>
         ))}
       </div>
-    </aside>
+    </div>
   );
 }
 
