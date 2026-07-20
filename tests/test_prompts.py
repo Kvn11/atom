@@ -44,10 +44,11 @@ def test_lead_prompt_notes_block_renders(base_config):
     out = render_lead_system_prompt(
         base_config, prof, "default", {"supports_vision": True},
         frequent_tool_names=["read_file"],
-        notes={"provider": "logseq", "root_dir": "/n/notes-smoke", "graph": "notes-smoke"},
+        notes={"provider": "obsidian", "vault": "notes-smoke", "root_dir": "/n/notes-smoke"},
     )
     assert "Persistent notes" in out
-    assert "notes-smoke" in out and "/n/notes-smoke" in out
+    assert "obsidian vault=notes-smoke" in out and "/n/notes-smoke" in out
+    assert "logseq" not in out.lower()
 
 
 def test_lead_prompt_no_notes_block_when_absent(base_config):
@@ -79,11 +80,11 @@ def test_build_lead_agent_renders_notes_into_system_prompt(base_config, monkeypa
     monkeypatch.setattr(agent_mod, "create_agent", spy_create)
     build_lead_agent(
         base_config, "default", prepared=make_prepared([AIMessage(content="x")]),
-        notes={"provider": "logseq", "root_dir": "/n/vault-xyz", "graph": "graph-xyz"},
+        notes={"provider": "obsidian", "vault": "vaultxyz", "root_dir": "/n/dir-xyz"},
     )
     sp = captured["system_prompt"]
     assert "Persistent notes" in sp
-    assert "/n/vault-xyz" in sp and "graph-xyz" in sp
+    assert "/n/dir-xyz" in sp and "obsidian vault=vaultxyz" in sp
 
 
 @pytest.mark.asyncio
@@ -105,9 +106,9 @@ async def test_run_agent_forwards_notes_to_build_lead_agent(base_config, monkeyp
     monkeypatch.setattr(rt, "build_lead_agent", spy_build)
     await run_agent(
         "hi", config=base_config, prepared=make_prepared([AIMessage(content="done")]),
-        notes={"provider": "logseq", "root_dir": "/x", "graph": "demo"},
+        notes={"provider": "obsidian", "vault": "demo", "root_dir": "/x"},
     )
-    assert captured["notes"] == {"provider": "logseq", "root_dir": "/x", "graph": "demo"}
+    assert captured["notes"] == {"provider": "obsidian", "vault": "demo", "root_dir": "/x"}
 
 
 def test_ask_clarification_is_return_direct():
@@ -149,10 +150,10 @@ def test_lead_prompt_renders_skill_catalog_not_body(base_config):
     out = render_lead_system_prompt(
         base_config, prof, "default", {"supports_vision": True},
         frequent_tool_names=["read_file", "load_skill"],
-        skill_catalog=[{"name": "logseq-cli", "description": "Operate the Logseq CLI"}],
+        skill_catalog=[{"name": "demo-skill", "description": "A demo skill"}],
         has_tool_library=False, has_skill_library=False,
     )
-    assert "logseq-cli" in out and "Operate the Logseq CLI" in out
+    assert "demo-skill" in out and "A demo skill" in out
     assert "load_skill" in out
     assert "FULL BODY" not in out               # only frontmatter, never the body
     assert "Skills (load before use)" in out
@@ -164,17 +165,17 @@ async def test_load_skill_tool_bound_when_skill_present(base_config, atom_home):
     from atom.runtime import run_agent
     from tests.conftest import make_prepared
 
-    d = atom_home / "skills" / "logseq-cli"
+    d = atom_home / "skills" / "demo-skill"
     d.mkdir(parents=True)
-    (d / "SKILL.md").write_text("---\nname: logseq-cli\ndescription: Operate Logseq\n---\nUSE THE CLI")
+    (d / "SKILL.md").write_text("---\nname: demo-skill\ndescription: A demo skill\n---\nBODY")
     prepared = make_prepared([
         AIMessage(content="", tool_calls=[
-            {"name": "load_skill", "args": {"name": "logseq-cli"}, "id": "l1", "type": "tool_call"}]),
+            {"name": "load_skill", "args": {"name": "demo-skill"}, "id": "l1", "type": "tool_call"}]),
         AIMessage(content="done"),
     ])
     result = await run_agent("do it", config=base_config, prepared=prepared)
     tool_msgs = [m for m in result.messages if isinstance(m, ToolMessage)]
-    assert any("Loaded skill 'logseq-cli'" in m.content for m in tool_msgs)
+    assert any("Loaded skill 'demo-skill'" in m.content for m in tool_msgs)
 
 
 def test_lead_prompt_advertises_skill_library_mount(base_config):

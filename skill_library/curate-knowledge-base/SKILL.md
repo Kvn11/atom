@@ -1,33 +1,38 @@
 ---
 name: curate-knowledge-base
-description: Domain-agnostic methodology for the wiki-curator lead agent to clean, organize, and connect a Logseq knowledge base (DB graph, via the `logseq` CLI) at scale via map-reduce over sub-agents. Senses the graph, partitions pages into groups, fans out digest sub-agents, reduces digests to find cross-group links and contradictions, applies earned organizational edits, and FLAGS (never resolves) contradictions/stale claims by annotating in-graph and reporting to the caller. The curator reads this after skill_search; if the phase names a domain it also skill_searches `curate-<domain>` for a lens. Never writes operational logs to the graph.
+description: Domain-agnostic methodology for the wiki-curator lead agent to clean, organize, and connect an Obsidian knowledge base (a vault of markdown notes, via the `obsidian` CLI) at scale via map-reduce over sub-agents. Senses the vault, partitions notes into groups, fans out digest sub-agents, reduces digests to find cross-group links and contradictions, applies earned organizational edits, and FLAGS (never resolves) contradictions/stale claims by annotating in-vault with `> [!curator]` callouts and reporting to the caller. The curator reads this after skill_search; if the phase names a domain it also skill_searches `curate-<domain>` for a lens. Never writes operational logs to the vault.
 ---
 
 # curate-knowledge-base
 
-You are a **wiki-curator lead agent**. You orchestrate a map-reduce curation pass over a Logseq DB graph. Read this skill in full before taking any action. You will dispatch sub-agents; you are the single writer.
+You are a **wiki-curator lead agent**. You orchestrate a map-reduce curation pass over an Obsidian vault via the `obsidian` CLI. Read this skill in full before taking any action. You will dispatch sub-agents; you are the single writer.
 
 ---
 
-## § 1 — Preconditions & graph
+## § 1 — Preconditions & vault
 
-Your unit of work is a Logseq **DB graph**, named in your prompt as `graph=<NAME>`. Optionally the prompt also gives `root_dir=<PATH>` when the graph does not live under the `logseq` CLI default (`~/logseq`). **There is no default graph.** If no graph is named, STOP immediately and return a report explaining that no graph was specified; do not proceed and never guess.
+Your unit of work is an Obsidian **vault** (a directory of markdown notes registered in Obsidian), named in your prompt as `vault=<NAME>`. Optionally the prompt also gives `root_dir=<PATH>`, the vault's directory on disk (used by the file-walk island script). **There is no default vault.** If no vault is named, STOP immediately and return a report explaining that no vault was specified; do not proceed and never guess.
 
-Once you have the graph name:
+Once you have the vault name:
 
-1. Confirm the graph exists and is accessible:
+1. Confirm the vault exists and is reachable:
    ```bash
-   logseq graph list --output json
-   # and/or, to inspect one graph:
-   logseq graph info --graph <NAME> [--root-dir <PATH>] --output json
+   obsidian vaults                       # the vault NAME must appear in this list
+   obsidian vault=<NAME> vault           # shows name / path / file count for that vault
    ```
-   If the graph is absent from the list or these commands error, STOP and report that graph `<NAME>` could not be found. Do not guess an alternate location; graph acquisition is the caller's responsibility, not yours.
+   If `<NAME>` is absent from `obsidian vaults` or these commands error, STOP and report that vault `<NAME>` could not be found. Do not guess an alternate vault; vault acquisition is the caller's responsibility, not yours.
 
-2. **Invariant — every subsequent `logseq` call carries `--graph <NAME>`** (and `--root-dir <PATH>` whenever `root_dir` was given in your prompt). Add `--output json` to any command whose output you parse. In the commands below, include the bracketed `[--root-dir <PATH>]` only when `root_dir` was provided.
+2. **Invariant — every `obsidian` call carries `vault=<NAME>`.** With no `vault=`, the CLI targets whatever vault happens to be active in the app (non-deterministic). Add `format=json` to any command whose output you parse (where the command supports it).
 
-3. Accept these optional prompt parameters:
+3. If `root_dir=<PATH>` was not provided in your prompt, resolve it once for the file-walk scripts:
+   ```bash
+   obsidian vault=<NAME> vault info=path
+   ```
+
+4. Accept these optional prompt parameters:
    - `domain=<domain>` — activates a `curate-<domain>` flavor lens (see §2).
-   - `since=<ISO-timestamp|epoch>` — activates incremental mode (see §3); interpreted against each page's `:block/updated-at`.
+   - `since=<ISO-timestamp|epoch>` — activates incremental mode (see §3); interpreted against each note's filesystem mtime.
+   - `since_git=<ref>` — git-ref variant of incremental mode (these vaults live inside git repos).
    - `full` — explicitly requests a full pass (ignores any `since`).
    - `max_passes=<N>` — override the convergence pass bound (default: 3).
 
@@ -46,93 +51,96 @@ If no `domain` parameter is given, or `domain=generic`, skip the flavor lookup e
 
 ---
 
-## § 3 — Stage 1: Sense (whole-graph, cheap, no page bodies read)
+## § 3 — Stage 1: Sense (whole-vault, cheap, no note bodies read)
 
-The goal of Sense is to build a terrain map of the graph in a few KB — structure, statistics, problem areas — without reading any page body in full. The Logseq DB already holds the link graph, so Sense is a handful of Datascript queries; nothing walks page bodies.
+The goal of Sense is to build a terrain map of the vault in a few KB — structure, statistics, problem areas — without reading any note body in full. The `obsidian` CLI answers most of this directly from the app's own link graph; only multi-note **islands** need the file-walk script.
 
-**Always run these commands.** First capture the two graph-shape queries — the real user pages, and the page→page reference edges — then feed both to the island detector:
-
-```bash
-# Real user pages: non-built-in, non-journal, >=1 block → [["Alpha",2],["Beta",1],…]
-logseq query --graph <NAME> [--root-dir <PATH>] --output json --query \
-'[:find ?t (count ?b) :where [?p :block/name] [?p :block/title ?t] (not [?p :db/ident]) (not [?p :block/journal-day]) [?b :block/page ?p]]' > /tmp/pages.json
-
-# Page→page reference edges (tags & built-ins excluded) → [["Gamma","Alpha"],["Alpha","Beta"],…]
-logseq query --graph <NAME> [--root-dir <PATH>] --output json --query \
-'[:find ?fp ?tp :where [?b :block/page ?f] [?f :block/title ?fp] [?b :block/refs ?t] [?t :block/title ?tp] [?t :block/name]]' > /tmp/edges.json
-
-# Island detection — every disconnected component, from the DB's own link graph
-python3 <skill_dir>/scripts/find-disconnected-pages.py \
-    --pages-json /tmp/pages.json --edges-json /tmp/edges.json --json
-
-# Tag and property statistics
-logseq list tag      --graph <NAME> [--root-dir <PATH>] --output json
-logseq list property --graph <NAME> [--root-dir <PATH>] --output json
-```
-
-Record from the `find-disconnected-pages.py` report:
-- Total page count (`note_count`) and component count (`component_count`, i.e. N_components_before). You will re-run this same Sense pipeline after applying edits to get N_components_after.
-- The main connected graph (`main_component`) and every disconnected **island** (`islands` — components of size ≥ 2 that share no path to the main component). A single-page cluster with no resolved links (an entry in `isolated`) is also an island.
-- Orphan pages (`orphans` — no inbound reference) and dead-end pages (`deadends` — no outbound reference). Both are derived by `find-disconnected-pages.py` from the edge list; no separate link-health command is needed.
-
-**If incremental (`since` provided, no `full` flag):**
+**Always run these commands.** First the CLI's link-health + structure queries:
 
 ```bash
-# Nodes, most-recently changed first; filter to those updated at/after `since`
-logseq list node --graph <NAME> [--root-dir <PATH>] --sort updated-at --order desc --output json
+# Files with no INCOMING links (orphans) and no OUTGOING links (dead-ends)
+obsidian vault=<NAME> orphans
+obsidian vault=<NAME> deadends
+
+# Wikilinks pointing at notes that don't exist (dangling targets)
+obsidian vault=<NAME> unresolved
+
+# Tag & property statistics (terrain), and the full note listing
+obsidian vault=<NAME> tags
+obsidian vault=<NAME> properties counts
+obsidian vault=<NAME> files
 ```
 
-`since` is interpreted against `:block/updated-at`. Take the page titles whose most recent block update is at/after `since`, then intersect that changed-page set with the component-membership list from `find-disconnected-pages.py`. For each changed page, include its entire component (and hub-neighborhood, if applicable) in the working set so context is never partial. Pages outside the working set are **out of scope for this pass** — name them in the skip/coverage section of your report.
+Then island detection — the one thing the CLI can't see (a cluster of notes that wikilink among THEMSELVES yet never connect to the main graph has no orphans and no dead-ends, so it is invisible to the CLI):
 
-Journals are out of scope by default: the user-page query above excludes `:block/journal-day`, so journal pages are never curation targets. Name that exclusion in the coverage section of your report.
+```bash
+python3 <skill_dir>/scripts/find-disconnected-notes.py <root_dir> --json
+```
 
-Sense produces no graph writes. It produces only your internal terrain map.
+Record:
+- Total note count (`note_count`) and component count (`component_count`, i.e. N_components_before) from `find-disconnected-notes.py`. You will re-run it after applying edits to get N_components_after.
+- The main connected graph (`main_component`) and every disconnected **island** (`islands` — components of size ≥ 2 that share no path to the main component). A single-note cluster with no resolved links (an entry in `isolated`) is also an island.
+- Orphan notes (from `obsidian … orphans`), dead-end notes (from `obsidian … deadends`), and unresolved links (from `obsidian … unresolved`).
+
+**If incremental (`since` or `since_git` provided, no `full` flag):**
+
+```bash
+# Changed notes since a timestamp (filesystem mtime)
+python3 <skill_dir>/scripts/find-recently-modified-notes.py <root_dir> --since <ISO-timestamp-or-epoch> [--json]
+
+# OR for git-tracked vaults
+python3 <skill_dir>/scripts/find-recently-modified-notes.py <root_dir> --since-git <ref> [--json]
+```
+
+Intersect the changed note ids with the component-membership list from `find-disconnected-notes.py`. For each changed note, include its entire component (and hub-neighborhood, if applicable) in the working set so context is never partial. Notes outside the working set are **out of scope for this pass** — name them in the skip/coverage section of your report.
+
+Sense produces no vault writes. It produces only your internal terrain map.
 
 ---
 
 ## § 4 — Stage 2: Partition
 
-Split the working set into sub-agent-sized groups. A group is sized so one general-purpose worker can read every page in it within context (target: ≤ 40 pages per group, or ≤ ~100 KB of page content; tune downward if pages are long).
+Split the working set into sub-agent-sized groups. A group is sized so one general-purpose worker can read every note in it within context (target: ≤ 40 notes per group, or ≤ ~100 KB of note content; tune downward if notes are long).
 
 Partitioning order:
 
-1. **Connected components first.** Each connected component from `find-disconnected-pages.py` is a natural group boundary. If a component exceeds the size bound, split it by hub-neighborhoods: pick the highest-degree page in the component as a hub, assign it and its 1-hop neighbors as one group, and recursively partition the remainder.
-2. **Namespace/tag clusters next.** Pages in the same namespace (the `parent/child` page hierarchy) or sharing a dominant tag form a natural group, especially for orphans or pages with only namespace- or tag-based cohesion.
-3. **Residual pages** (orphans not captured above) go into small groups of ≤ 20.
+1. **Connected components first.** Each connected component from `find-disconnected-notes.py` is a natural group boundary. If a component exceeds the size bound, split it by hub-neighborhoods: pick the highest-degree note in the component as a hub, assign it and its 1-hop neighbors as one group, and recursively partition the remainder.
+2. **Folder/tag clusters next.** Notes in the same folder (the vault's directory structure) or sharing a dominant tag form a natural group, especially for orphans or notes with only folder- or tag-based cohesion.
+3. **Residual notes** (orphans not captured above) go into small groups of ≤ 20.
 
-Label every group (e.g., `group-1-component-A`, `group-7-namespace-security`). You will use these labels in the Reduce and Report stages.
+Label every group (e.g., `group-1-component-A`, `group-7-folder-security`). You will use these labels in the Reduce and Report stages.
 
-Do not read page bodies during Partition. Use only the page titles and link graph from Sense.
+Do not read note bodies during Partition. Use only the note paths and link graph from Sense.
 
 ---
 
 ## § 5 — Stage 3: Map (fan out)
 
-Dispatch **one `general-purpose` sub-agent per group** in a single response. All workers are read-only. Include `graph=<NAME>` (and `root_dir=<PATH>` when given) in every worker prompt. Use the Digest Worker template from §11.
+Dispatch **one `general-purpose` sub-agent per group** in a single response. All workers are read-only. Include `vault=<NAME>` (and `root_dir=<PATH>` when given) in every worker prompt. Use the Digest Worker template from §11.
 
 Issue all digest dispatches in one batch (a single response with N `task()` calls, one per group) so they run in parallel. Wait for all digests to return before proceeding to Reduce.
 
-Do not read page bodies yourself during this stage; the workers do the reading. Your job is to collect and synthesize their structured digests.
+Do not read note bodies yourself during this stage; the workers do the reading. Your job is to collect and synthesize their structured digests.
 
 ---
 
 ## § 6 — Stage 4: Reduce (you, the lead)
 
-You now hold N small digests — structured summaries, not full page text. This fits in context even for hundreds of pages.
+You now hold N small digests — structured summaries, not full note text. This fits in context even for hundreds of notes.
 
 Derive candidates from the digests:
 
 **Cross-group link candidates.**
-A dangling reference in group A (an entity/term mentioned but not linked) that matches a page or entity in group B → candidate earned wikilink. Record: source page, target page, group A, group B, the referencing text snippet from the digest.
+A dangling reference in group A (an entity/term mentioned but not linked) that matches a note or entity in group B → candidate earned wikilink. Record: source note, target note, group A, group B, the referencing text snippet from the digest.
 
-**Missing concept page candidates.**
-An entity recurring in 3+ group digests with no canonical page anywhere → candidate for a new concept/MOC page. Do NOT auto-create it; record for the report.
+**Missing concept note candidates.**
+An entity recurring in 3+ group digests with no canonical note anywhere → candidate for a new concept/MOC note. Do NOT auto-create it; record for the report.
 
 **Contradiction candidates.**
-A claim in group A that directly conflicts with a claim in group B (same entity, opposite or incompatible assertions, both with cited evidence) → candidate contradiction. Record both pages, both claims, both evidence citations.
+A claim in group A that directly conflicts with a claim in group B (same entity, opposite or incompatible assertions, both with cited evidence) → candidate contradiction. Record both notes, both claims, both evidence citations.
 
 **Stale / ambiguous claim candidates.**
-A claim in a digest that cites NO evidence (ambiguous/unverified), or that cites evidence a more-recent page supersedes (stale per `:block/updated-at` or log timestamps in the digest) → candidate stale or ambiguous claim. Record: the page, the claim text, and the reason (no cited evidence, or specifically-named newer page that supersedes it).
+A claim in a digest that cites NO evidence (ambiguous/unverified), or that cites evidence a more-recent note supersedes (stale per a note's `updated:` frontmatter or mtime, or log timestamps in the digest) → candidate stale or ambiguous claim. Record: the note, the claim text, and the reason (no cited evidence, or specifically-named newer note that supersedes it).
 
 **Island reconnection.**
 For each disconnected island identified in Sense, dispatch one `general-purpose` sub-agent per island, acting as island reconciler (see §11). The reconciler proposes reconnection links; it never writes. Collect its structured proposals.
@@ -143,13 +151,13 @@ Contradictions and stale/ambiguous claims identified here are **candidates only*
 
 ## § 7 — Stage 5: Verify
 
-For each candidate link and each candidate contradiction, dispatch a focused Verify Worker (general-purpose sub-agent; see §11). These workers read only the two relevant pages plus any cited evidence. They return a yes/no verdict with one sentence of justification.
+For each candidate link and each candidate contradiction, dispatch a focused Verify Worker (general-purpose sub-agent; see §11). These workers read only the two relevant notes plus any cited evidence. They return a yes/no verdict with one sentence of justification.
 
 **Earned link:** confirmed when the verify worker affirms it is a genuine, justifiable relationship — not a surface keyword match.
 
 **Real contradiction:** confirmed when the verify worker affirms the two claims genuinely conflict (not a misread, not a different scope). A verify worker NEVER resolves a contradiction — it only confirms or denies that the conflict is real.
 
-**Stale / ambiguous claim:** confirmed when the verify worker affirms that the claim genuinely lacks cited evidence (for ambiguous candidates), or that a specifically-named newer page in the same graph actually supersedes it (for stale candidates). A verify worker NEVER resolves a stale or ambiguous claim — it only confirms whether the candidate status is real.
+**Stale / ambiguous claim:** confirmed when the verify worker affirms that the claim genuinely lacks cited evidence (for ambiguous candidates), or that a specifically-named newer note in the same vault actually supersedes it (for stale candidates). A verify worker NEVER resolves a stale or ambiguous claim — it only confirms whether the candidate status is real.
 
 Discard unconfirmed candidates. Proceed to Apply only with verified candidates.
 
@@ -161,145 +169,100 @@ Dispatch all verify workers in one batch per candidate type, wait for all result
 
 ## § 8 — Stage 6: Apply + annotate (you are the SINGLE writer)
 
-You are the only agent that writes to the graph. Workers propose; you apply.
+You are the only agent that writes to the vault. Workers propose; you apply. All writes go through the `obsidian` CLI carrying `vault=<NAME>`.
 
 **Organizational edits you apply (earned edits):**
 
 | Edit | Apply when |
 |---|---|
-| Earned wikilink | Verify worker confirmed it is a real, justified relationship; apply by adding `[[Target]]` into the relevant block via `logseq upsert block` |
+| Earned wikilink | Verify worker confirmed a real, justified relationship. Read the host note (`obsidian vault=<NAME> read file="<Note>"`), insert `[[Target]]` into the relevant sentence, and write it back with `obsidian vault=<NAME> create name="<Note>" content="<full updated note>" overwrite`. When a clean inline insertion isn't possible, instead `obsidian vault=<NAME> append file="<Note>" content="See also [[Target]]."` |
 | Island reconnection | island-reconciler proposed it and a verify worker confirmed at least one earned link to the main graph |
-| Genuine same-subject merge | Two pages clearly describe the same entity; content is complementary; no substantive information loss — this is your direct judgment from the digests; no separate verify worker is required |
-| Monolithic-page split | A single page covers multiple clearly distinct subjects; split improves navigability — this is your direct judgment from the digests; no separate verify worker is required |
+| Genuine same-subject merge | Two notes clearly describe the same entity; content is complementary; no substantive information loss — your direct judgment from the digests; no separate verify worker required. Merge by rewriting the survivor (`create … overwrite`) and `obsidian vault=<NAME> delete file="<Duplicate>"`. |
+| Monolithic-note split | A single note covers multiple clearly distinct subjects; split improves navigability — your direct judgment from the digests. Create the new notes (`create`) and trim the original (`create … overwrite`). |
 
-For each applied edit, record: edit type, affected pages, brief justification. This goes in your report.
+For each applied edit, record: edit type, affected notes, brief justification. This goes in your report.
 
-**One-time schema bootstrap (run once, before the first flag).** Logseq requires a tag/property's schema to pre-exist before a block can use it, so run these four commands once at the start of the pass. They are idempotent — re-running them is a safe no-op:
-
-```bash
-logseq upsert tag      --graph <NAME> [--root-dir <PATH>] --name curator
-logseq upsert property --graph <NAME> [--root-dir <PATH>] --name curator-type           --type default
-logseq upsert property --graph <NAME> [--root-dir <PATH>] --name curator-flagged        --type default
-logseq upsert property --graph <NAME> [--root-dir <PATH>] --name curator-conflicts-with --type default
-```
-
-All three properties are `type default` (text). Do **not** use `type date`: it rejects a plain `YYYY-MM-DD` string (it demands a journal date) and leaves a partial write.
+Obsidian needs **no schema bootstrap** — notes are plain markdown, tags are `#tags`, and properties are YAML frontmatter. There is nothing to pre-declare before writing.
 
 **Annotations you write for knowledge caveats:**
 
-For every confirmed contradiction, stale claim, and ambiguous/unverified claim, write the in-graph annotation (§9) as a **child block tagged `#curator`**. Attach it to the specific offending **block** — using the block id that a digest or verify worker reported for the flagged claim — with `--target-id <blockId> --pos last-child`; when no block id is known, omit those two flags and attach at page level. For contradictions, flag BOTH pages involved; for stale/ambiguous claims, flag the one page. Each write is a single `logseq upsert block`:
+For every confirmed contradiction, stale claim, and ambiguous/unverified claim, append an in-vault `> [!curator]` callout (§9) to the offending note, and optionally set a machine-readable frontmatter flag. For contradictions, flag BOTH notes involved; for stale/ambiguous claims, flag the one note. Each annotation is one `append` (plus an optional `property:set`):
 
 ```bash
-logseq upsert block --graph <NAME> [--root-dir <PATH>] --target-page "<HostPage>" \
-  [--target-id <blockId> --pos last-child] \
-  --content '<flag text from §9>' \
-  --update-tags '["curator"]' \
-  --update-properties '{:curator-type "<type>" :curator-flagged "<YYYY-MM-DD>" [:curator-conflicts-with "<Other>"]}'
+obsidian vault=<NAME> append file="<HostNote>" content='<callout text from §9, using \n between lines>'
+obsidian vault=<NAME> property:set name=curator-flag value=<type> type=text file="<HostNote>"
 ```
 
-The `--content` names the other page in **plain text** (e.g. `page Beta`), never as a `[[wikilink]]`. The machine-readable link stays in the `curator-conflicts-with` property.
-
-> **⚠️ A flag block's `--content` must contain NO `[[wikilinks]]` at all — none.**
-> When `upsert block` carries `--update-tags`/`--update-properties`, the CLI stamps the `#curator`
-> tag AND every `curator-*` property onto **every page the content `[[references]]`** — polluting
-> that page. The residue survives `remove block` and is invisible to the flag-enumeration query,
-> breaking convergence and the single-writer/no-pollution invariant. This applies not just to the
-> conflicting/superseding page — it applies to **any** `[[link]]` anywhere in the content, including
-> one embedded inside the quoted claim snippet (`claim "X"`). Name the other page in **plain text**
-> in the content and record it in the `curator-conflicts-with` property. If the claim you are quoting
-> itself contains `[[links]]`, render it as **plain text** — strip the `[[ ]]` brackets — before
-> putting it in the flag content. (Earned-wikilink edits are unaffected: they edit a normal block's
-> content **without** `--update-tags`/`--update-properties`, so `[[links]]` there are fine.)
-
-Then record the annotation for your report.
+In Obsidian, `[[wikilinks]]` in the callout content are **fine** — notes are plain markdown, so naming `[[Other Note]]` in a flag does not pollute that note. Use a real wikilink to the other note in the callout body.
 
 **Things you NEVER do:**
 
 - Never resolve a contradiction or adjudicate between conflicting claims — not even when one side has stronger evidence. Resolving a domain claim requires domain expertise or research beyond curation. Annotate and surface it; a specialist resolves it.
-- Never auto-delete a substantive page. Report possible deletions; do not act on them.
-- Never auto-create concept/MOC pages. Report them as candidates; do not create them.
-- Never write activity logs, skip logs, or coverage notes into the graph. Those belong in your caller report only.
+- Never auto-delete a substantive note. Report possible deletions; do not act on them. (A confirmed same-subject *merge* is the one exception, and only when no substantive information is lost.)
+- Never auto-create concept/MOC notes. Report them as candidates; do not create them.
+- Never write activity logs, skip logs, or coverage notes into the vault. Those belong in your caller report only.
 
 ---
 
 ## § 9 — Annotation format & idempotency
 
-Write in-graph knowledge-caveat annotations as a **block tagged `#curator`** with the `curator-*` properties set. Use this exact content + property mapping per flag type.
+Write in-vault knowledge-caveat annotations as an Obsidian **`> [!curator]` callout** appended to the offending note. Use `\n` between lines in the `content=` value. Use this exact shape per flag type.
 
-> When quoting `claim "X"` in any of the three templates below, strip any `[[ ]]` brackets from the
-> quote first — the entire flag content must be wikilink-free (see §8's warning).
-
-**Contradiction** — attach to the offending block; set `curator-conflicts-with` to the other page:
+**Contradiction** — name the other note as a real `[[wikilink]]`:
 
 ```bash
-logseq upsert block --graph <NAME> [--root-dir <PATH>] --target-page "<HostPage>" \
-  [--target-id <blockId> --pos last-child] \
-  --content 'Contradiction: claim "X" here conflicts with page <Other>; evidence cited on both sides; resolving needs research/RE/domain analysis beyond curation. — wiki-curator' \
-  --update-tags '["curator"]' \
-  --update-properties '{:curator-type "contradiction" :curator-flagged "<YYYY-MM-DD>" :curator-conflicts-with "<Other>"}'
+obsidian vault=<NAME> append file="<HostNote>" content='> [!curator] Contradiction · flagged <YYYY-MM-DD>\n> Claim "X" here conflicts with [[Other Note]] ("¬X"). Evidence is cited on both sides; resolving it needs research/RE/domain analysis beyond curation. A domain specialist should reconcile. — wiki-curator'
+obsidian vault=<NAME> property:set name=curator-flag value=contradiction type=text file="<HostNote>"
 ```
 
-**Stale claim** — the superseding page goes in `curator-conflicts-with`:
+**Stale claim** — name the superseding note:
 
 ```bash
-logseq upsert block --graph <NAME> [--root-dir <PATH>] --target-page "<HostPage>" \
-  [--target-id <blockId> --pos last-child] \
-  --content 'Stale claim: "X" may be superseded by page <Newer>. A domain specialist should verify currency. — wiki-curator' \
-  --update-tags '["curator"]' \
-  --update-properties '{:curator-type "stale" :curator-flagged "<date>" :curator-conflicts-with "<Newer>"}'
+obsidian vault=<NAME> append file="<HostNote>" content='> [!curator] Stale · flagged <YYYY-MM-DD>\n> Claim "X" may be superseded by [[Newer Note]]. A domain specialist should verify currency. — wiki-curator'
+obsidian vault=<NAME> property:set name=curator-flag value=stale type=text file="<HostNote>"
 ```
 
-**Ambiguous / unverified claim** — no `curator-conflicts-with`; page-level attach is fine:
+**Ambiguous / unverified claim** — no other note referenced:
 
 ```bash
-logseq upsert block --graph <NAME> [--root-dir <PATH>] --target-page "<HostPage>" \
-  --content 'Ambiguous claim: "X" lacks sufficient cited evidence to verify. A domain specialist should confirm or source it. — wiki-curator' \
-  --update-tags '["curator"]' \
-  --update-properties '{:curator-type "ambiguous" :curator-flagged "<date>"}'
+obsidian vault=<NAME> append file="<HostNote>" content='> [!curator] Ambiguous · flagged <YYYY-MM-DD>\n> Claim "X" lacks sufficient cited evidence to verify. A domain specialist should confirm or source it. — wiki-curator'
+obsidian vault=<NAME> property:set name=curator-flag value=ambiguous type=text file="<HostNote>"
 ```
 
 **Idempotency protocol (run before every annotation write):**
 
-1. Enumerate the graph's existing `#curator` flags with the **portable** enumeration query — keyed on the tag's `:block/name`, never on a hardcoded ident:
+1. Enumerate the vault's existing `#curator` flags — every note carrying a curator callout:
    ```bash
-   logseq query --graph <NAME> [--root-dir <PATH>] --output json --query \
-   '[:find ?host ?content :where [?t :block/name "curator"] [?b :block/tags ?t] [?b :block/page ?hp] [?hp :block/title ?host] [?b :block/title ?content]]'
+   obsidian vault=<NAME> search query="[!curator]" format=json
    ```
-   The curator reads the conflicting/superseding page from each flag's **content text** and its `curator-conflicts-with` property (both rendered by `logseq show`), **not** from `:block/refs` — a flag's content deliberately carries no `[[ref]]` (see §8's propagation warning). Match a stored flag to a candidate by (host page, the other page named in the content/property, `curator-type`).
-2. If a flag already exists for the same (host page/block, other page, type) **and** the conflict still holds (re-verified in Stage 5): leave it in place — optionally refresh its `curator-flagged` date. Do NOT duplicate it.
-3. If a flag exists but the conflict **no longer holds** (evidence resolved or pages updated): remove it. This is how convergence shrinks the annotation surface over time. Get the flag block's id, then remove it:
+   Read the flagged note (`obsidian vault=<NAME> read file="<Note>"`) to get each callout's type and the other note it names. Match a stored flag to a candidate by (host note, the other note named in the callout, flag type).
+2. If a flag already exists for the same (host note, other note, type) **and** the conflict still holds (re-verified in Stage 5): leave it in place — optionally refresh its `flagged` date. Do NOT duplicate it.
+3. If a flag exists but the conflict **no longer holds** (evidence resolved or notes updated): remove it. This is how convergence shrinks the annotation surface over time. Read the note, delete the `> [!curator]` callout block from its content, and write it back:
    ```bash
-   # List curator-tagged nodes; keep those whose "node/type" is "block" to get the flag block id
-   logseq list node --graph <NAME> [--root-dir <PATH>] --tags curator --output json
-   logseq remove block --graph <NAME> [--root-dir <PATH>] --id <blockId>     # or --uuid <uuid>
+   obsidian vault=<NAME> read file="<Note>"                       # capture current content
+   obsidian vault=<NAME> create name="<Note>" content="<content with the callout block removed>" overwrite
+   obsidian vault=<NAME> property:remove name=curator-flag file="<Note>"
    ```
-4. If no matching flag exists: write the new annotation.
+4. If no matching flag exists: append the new annotation.
 
-> **⚠️ Never hardcode `:user.property/*` or `:user.class/*` db/idents in any query.**
-> Logseq mints those idents with a **random per-graph suffix**, so a literal like
-> `:user.property/curator-type` matches nothing in another graph. The enumeration query above
-> keys off the tag's `:block/name "curator"` (via `:block/tags`) instead — portable across
-> graphs. Writes use the friendly property names (`curator-type`,
-> `curator-flagged`, `curator-conflicts-with`); the CLI resolves those to the right idents.
-
-This annotation is **knowledge**, not a log. It is the one thing the curator writes to the graph besides earned organizational edits. Future readers — human or specialist agent — use it to see what still needs resolution.
+This annotation is **knowledge**, not a log. It is the one thing the curator writes to the vault besides earned organizational edits. Future readers — human or specialist agent — use it to see what still needs resolution.
 
 ---
 
 ## § 10 — Stage 7: Report + converge
 
-**The report is your phase return message** (primary channel). Optionally also write a durable copy of the report to a file **outside the graph**. NEVER write any activity log, skip log, or coverage log into the graph itself.
+**The report is your phase return message** (primary channel). Optionally also write a durable copy of the report to a file **outside the vault**. NEVER write any activity log, skip log, or coverage log into the vault itself.
 
 **Report structure:**
 
 1. **Edits applied** — total count, broken down by type (earned wikilinks, island reconnections, merges, splits), with 3–5 representative samples showing before/after.
-2. **Contradictions flagged** — list each: Page A ("claim X") ↔ Page B ("¬X"), with evidence citations from both sides.
-3. **Stale / ambiguous claims flagged** — list each: page, claim, reason flagged.
-4. **Genuinely unrelated islands** — islands where `island-reconciler` found no earned reconnection path. List island members.
-5. **Candidate concept pages** — entities recurring across 3+ groups with no canonical page.
-6. **Possible deletions** — pages that appear to be obsolete, superseded, or empty; not auto-deleted.
-7. **Skip / coverage log** — what was out of scope for this pass (pages outside the `since` window, journal pages excluded by default, groups not re-digested due to size bounds, groups skipped by error) and why. No silent truncation: every out-of-scope page is named or its exclusion criterion is stated.
-8. **Convergence verdict** — component count before (N_components_before) and after (N_components_after) from re-running the Sense island pipeline (`find-disconnected-pages.py`). State which pass number this was and whether you stopped due to no-new-edits or reached the max_passes bound.
+2. **Contradictions flagged** — list each: Note A ("claim X") ↔ Note B ("¬X"), with evidence citations from both sides.
+3. **Stale / ambiguous claims flagged** — list each: note, claim, reason flagged.
+4. **Genuinely unrelated islands** — islands where the island-reconciler found no earned reconnection path. List island members.
+5. **Candidate concept notes** — entities recurring across 3+ groups with no canonical note.
+6. **Possible deletions** — notes that appear obsolete, superseded, or empty; not auto-deleted.
+7. **Skip / coverage log** — what was out of scope for this pass (notes outside the `since` window, groups not re-digested due to size bounds, groups skipped by error) and why. No silent truncation: every out-of-scope note is named or its exclusion criterion is stated.
+8. **Convergence verdict** — component count before (N_components_before) and after (N_components_after) from re-running the Sense island pipeline (`find-disconnected-notes.py`). State which pass number this was and whether you stopped due to no-new-edits or reached the max_passes bound.
 
 **Convergence loop:**
 
@@ -313,27 +276,29 @@ State the stopping reason in your report.
 
 ## § 11 — Worker prompt templates
 
-Use these copy-paste templates. Replace `<NAME>` with the actual graph name (and `<PATH>` with `root_dir` when given) and fill in the bracketed fields. Include `graph=<NAME> [root_dir=<PATH>]` in every worker prompt.
+Use these copy-paste templates. Replace `<NAME>` with the actual vault name (and `<PATH>` with `root_dir` when given) and fill in the bracketed fields. Include `vault=<NAME> [root_dir=<PATH>]` in every worker prompt.
 
 ---
 
 ### Digest Worker (general-purpose sub-agent)
 
 ```
-graph=<NAME> [root_dir=<PATH>]. Read ONLY these pages: <comma-separated list of page titles>.
+vault=<NAME> [root_dir=<PATH>]. Read ONLY these notes: <comma-separated list of note names>.
 Read each one with:
-    logseq show --graph <NAME> [--root-dir <PATH>] --page "<Page>" --linked-references true
-This renders every block with its numeric block id and a "Linked References" section.
+    obsidian vault=<NAME> read file="<Note>"
+and get its link context with:
+    obsidian vault=<NAME> backlinks file="<Note>" format=json      # incoming (linked references)
+    obsidian vault=<NAME> links    file="<Note>"                    # outgoing links
 
 Return a structured digest with these sections:
-1. Key entities — the main subjects, concepts, people, or components each page is about.
+1. Key entities — the main subjects, concepts, people, or components each note is about.
 2. Claims with evidence — significant factual assertions, each with its cited evidence
-   (source reference if present) AND the numeric block id of the block that carries it,
-   so the curator can attach an annotation to that exact block.
-3. Outbound page refs — all [[page refs]] in these pages (even if the target page doesn't exist yet).
-4. Dangling references — entities, terms, or concepts mentioned in these pages that likely have
-   their own dedicated page elsewhere in the graph, but that are NOT currently linked as a
-   [[page ref]]. List each as: term/entity → the page where it appears → the block id + sentence
+   (source reference if present) AND a short VERBATIM quote of the sentence that carries it,
+   so the curator can locate that claim to attach an annotation (Obsidian has no block ids).
+3. Outbound note refs — all [[note refs]] in these notes (even if the target note doesn't exist yet).
+4. Dangling references — entities, terms, or concepts mentioned in these notes that likely have
+   their own dedicated note elsewhere in the vault, but that are NOT currently linked as a
+   [[note ref]]. List each as: term/entity → the note where it appears → the quoted sentence
    where it appears.
 
 Do not edit anything. Return only the structured digest.
@@ -344,12 +309,12 @@ Do not edit anything. Return only the structured digest.
 ### Verify Worker (general-purpose sub-agent)
 
 ```
-graph=<NAME> [root_dir=<PATH>]. Confirm whether the following candidate is real by reading ONLY
-these pages: <Page A>, <Page B> [, <cited-evidence-page-if-any>]. Read each via:
-    logseq show --graph <NAME> [--root-dir <PATH>] --page "<Page>" --linked-references true
+vault=<NAME> [root_dir=<PATH>]. Confirm whether the following candidate is real by reading ONLY
+these notes: <Note A>, <Note B> [, <cited-evidence-note-if-any>]. Read each via:
+    obsidian vault=<NAME> read file="<Note>"
 
-Candidate: <"earned link from [[Page A]] to [[Page B]] because <reason>"
-         OR "contradiction: Page A claims '<X>' but Page B claims '<¬X>'">
+Candidate: <"earned link from [[Note A]] to [[Note B]] because <reason>"
+         OR "contradiction: Note A claims '<X>' but Note B claims '<¬X>'">
 
 For a link: Is this an EARNED relationship — one that is genuinely justified
 and expressible in one sentence? A keyword match alone is not earned.
@@ -358,14 +323,14 @@ For a contradiction: Do the two claims genuinely conflict, or is this a
 difference of scope, time period, or context that does not constitute a
 real conflict? Do NOT resolve a contradiction. Return only a verdict.
 
-For a stale/ambiguous claim: Does the page genuinely lack cited evidence for
-this claim (ambiguous), or does the specifically-named newer page in this graph
+For a stale/ambiguous claim: Does the note genuinely lack cited evidence for
+this claim (ambiguous), or does the specifically-named newer note in this vault
 actually supersede it (stale)? Do NOT resolve the claim. Return only a verdict.
 
-If you affirm a claim-level flag, also report the numeric block id of the offending
-block (from `logseq show`) so the curator can block-attach the annotation.
+If you affirm a claim-level flag, also report a short VERBATIM quote of the offending
+sentence so the curator can locate it in the note.
 
-Return: YES or NO, followed by one sentence of justification (and the block id when
+Return: YES or NO, followed by one sentence of justification (and the quoted sentence when
 flagging a claim). Nothing else.
 ```
 
@@ -377,14 +342,14 @@ flagging a claim). Nothing else.
 task(
     subagent_type="general-purpose",
     prompt=(
-        "graph=<NAME> [root_dir=<PATH>]. You are acting as island reconciler for this graph. "
-        "Island members: <comma-separated list of page titles>. "
-        "Read each page via `logseq show --graph <NAME> [--root-dir <PATH>] --page \"<Page>\" "
-        "--linked-references true`. Propose earned reconnection links from this island to the "
-        "main connected component (or to another island, where genuinely justified) — each "
-        "proposal must be a real, justifiable relationship expressible in one sentence, not a "
-        "surface keyword match. Return each proposal as: source page, target page, one-sentence "
-        "justification. Do not write anything to the graph — return proposals only."
+        "vault=<NAME> [root_dir=<PATH>]. You are acting as island reconciler for this vault. "
+        "Island members: <comma-separated list of note names>. "
+        "Read each note via `obsidian vault=<NAME> read file=\"<Note>\"`. Propose earned "
+        "reconnection links from this island to the main connected component (or to another "
+        "island, where genuinely justified) — each proposal must be a real, justifiable "
+        "relationship expressible in one sentence, not a surface keyword match. Return each "
+        "proposal as: source note, target note, one-sentence justification. Do not write "
+        "anything to the vault — return proposals only."
     )
 )
 ```
@@ -395,14 +360,14 @@ This worker (acting as island-reconciler) returns a structured proposal (earned 
 
 ## § 12 — Invariants recap
 
-These invariants hold in every pass, for every graph, in every domain:
+These invariants hold in every pass, for every vault, in every domain:
 
-- **Graph from prompt, no default.** The graph is always named in your phase prompt. No graph → STOP and report; never guess.
-- **Earned edits only.** A wikilink is a claim of a real relationship. Never force a link. Never delete a substantive page. Never auto-create concept pages.
+- **Vault from prompt, no default.** The vault is always named in your phase prompt as `vault=<NAME>`. No vault → STOP and report; never guess. Every `obsidian` call carries `vault=<NAME>`.
+- **Earned edits only.** A wikilink is a claim of a real relationship. Never force a link. Never delete a substantive note. Never auto-create concept notes.
 - **Detects-and-flags, never adjudicates.** The curator never resolves a contradiction, stale claim, or ambiguous claim — not even with cited evidence on one side. Resolving domain claims requires domain expertise beyond curation. Annotate and surface; a specialist resolves.
 - **Do not resolve contradictions under any circumstances.** Not in Stage 5. Not in Stage 6. Not in the report. Not as a "tentative suggestion." Flag it; move on.
-- **Dual-channel surfacing.** Write an in-graph `#curator` block annotation for knowledge caveats (durable, in context for future readers) AND include them in your caller report (operational). Both channels are required.
-- **No graph logs.** Activity logs, skip logs, and coverage notes go to the caller report and optionally a file outside the graph, never into the graph. The in-graph `#curator` block annotation is knowledge, not a log.
-- **Convergence.** Re-running on an already-clean graph is a near-no-op. Resolved annotations are removed; unresolved ones are not duplicated. Stop on no-new-edits or at max_passes.
+- **Dual-channel surfacing.** Write an in-vault `> [!curator]` callout for knowledge caveats (durable, in context for future readers) AND include them in your caller report (operational). Both channels are required.
+- **No vault logs.** Activity logs, skip logs, and coverage notes go to the caller report and optionally a file outside the vault, never into the vault. The in-vault `> [!curator]` callout is knowledge, not a log.
+- **Convergence.** Re-running on an already-clean vault is a near-no-op. Resolved annotations are removed; unresolved ones are not duplicated. Stop on no-new-edits or at max_passes.
 - **Unattended.** This is an autonomous protocol phase. Never call `ask_clarification`. Make the conservative, safe call and record it in the report.
 - **curate-<domain> convention.** If a domain is named in your prompt, `skill_search` for `curate-<domain>` before Stage 1. Apply its lens; do not skip this step when a domain is present.

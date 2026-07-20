@@ -65,7 +65,7 @@ class SubagentRunner:
     retry: Any = None                    # RetryPolicy | None; wired in Task 3 (child model retry/backoff)
     skill_catalog: list = field(default_factory=list)  # [{"name","description"}] always-on catalog
     has_skill_library: bool = False      # a skill_library/ exists -> bind search_skills
-    notes: dict | None = None            # per-workflow Logseq vault ctx (root_dir/graph); bash children only
+    notes: dict | None = None            # per-workflow Obsidian vault ctx (vault/root_dir); bash children only
     overflow_recovery: bool = True
     overflow_max_attempts: int = 3
     overflow_target_ratio: float = 0.5

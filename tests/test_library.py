@@ -216,14 +216,14 @@ def test_skill_library_injects_promoted_bodies_transiently(atom_home):
 def test_load_skill_catalog_autodiscovers_skills_folder(atom_home):
     from atom.library import load_skill_catalog
 
-    d = atom_home / "skills" / "logseq-cli"
+    d = atom_home / "skills" / "demo-skill"
     d.mkdir(parents=True)
     (d / "SKILL.md").write_text(
-        "---\nname: logseq-cli\ndescription: Operate the Logseq CLI\n---\nFULL BODY HERE"
+        "---\nname: demo-skill\ndescription: A demo skill\n---\nFULL BODY HERE"
     )
     catalog = load_skill_catalog(atom_home, [])
-    assert [e.name for e in catalog] == ["logseq-cli"]
-    assert catalog[0].description == "Operate the Logseq CLI"
+    assert [e.name for e in catalog] == ["demo-skill"]
+    assert catalog[0].description == "A demo skill"
 
 
 def test_load_skill_catalog_adds_library_extras_and_dedupes(atom_home):

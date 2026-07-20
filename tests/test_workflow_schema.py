@@ -92,17 +92,17 @@ def test_notes_defaults_disabled():
     wf = WorkflowDef.model_validate(
         {"name": "w", "steps": [{"title": "s", "tasks": [{"prompt": "p"}]}]})
     assert wf.notes.enabled is False
-    assert wf.notes.provider == "logseq"
-    assert wf.notes.graph is None
+    assert wf.notes.provider == "obsidian"
+    assert wf.notes.vault is None
 
 
 def test_notes_block_parses():
     wf = WorkflowDef.model_validate({
         "name": "w",
-        "notes": {"enabled": True, "graph": "my-graph"},
+        "notes": {"enabled": True, "vault": "my-vault"},
         "steps": [{"title": "s", "tasks": [{"prompt": "p"}]}],
     })
-    assert wf.notes.enabled is True and wf.notes.graph == "my-graph"
+    assert wf.notes.enabled is True and wf.notes.vault == "my-vault"
 
 
 def test_resolve_inputs_treats_null_as_missing(atom_home):

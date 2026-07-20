@@ -15,8 +15,8 @@ These skills are available. Before using one, load its full instructions with `l
 - **{{ s.name }}** — {{ s.description }}
 {% endfor %}{% endif %}
 {% if notes %}
-# Persistent notes (Logseq)
-A Logseq vault persists across every run of this workflow — treat it as long-term memory. Graph `{{ notes.graph }}` lives at root-dir `{{ notes.root_dir }}`. Reach it with the logseq CLI: `logseq --root-dir {{ notes.root_dir }} --graph {{ notes.graph }} <command>`. Load the `logseq-cli` skill (`load_skill("logseq-cli")`) for command details. Before you start, read what earlier runs left; as you work, record durable notes and tasks there so future runs can build on them.
+# Persistent notes (Obsidian)
+A registered Obsidian vault named `{{ notes.vault }}` (on disk at `{{ notes.root_dir }}`) persists across every run of this workflow — treat it as long-term memory. Reach it with the `obsidian` CLI via `bash`, always passing `vault={{ notes.vault }}`: e.g. `obsidian vault={{ notes.vault }} files`, `obsidian vault={{ notes.vault }} read file="<Note>"`, `obsidian vault={{ notes.vault }} append file="<Note>" content="<text>"`, `obsidian vault={{ notes.vault }} search query="<text>"`. Run `obsidian help` (or `obsidian help <command>`) for the full command list. Before you start, read what earlier runs left; as you work, record durable notes there so future runs can build on them.
 {% endif %}
 # How to work
 - **Plan before you act.** For anything beyond a single step, call `write_todos` first to lay out a short, concrete plan, then keep it live — mark exactly one item `in_progress`, and flip it to `completed` the moment it's done. Don't batch completions, and don't let the plan drift from what you're actually doing.

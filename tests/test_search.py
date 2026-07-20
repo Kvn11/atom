@@ -22,12 +22,12 @@ def test_search_skills_lists_and_does_not_promote(atom_home):
 
 
 def test_load_skill_promotes_known_skill(atom_home):
-    d = atom_home / "skills" / "logseq-cli"
+    d = atom_home / "skills" / "demo-skill"
     d.mkdir(parents=True)
-    (d / "SKILL.md").write_text("---\nname: logseq-cli\ndescription: Operate Logseq\n---\nBODY")
-    cmd = load_skill.func(_runtime(atom_home), name="logseq-cli")
-    assert cmd.update["promoted_skills"] == ["logseq-cli"]
-    assert "Loaded skill 'logseq-cli'" in cmd.update["messages"][0].content
+    (d / "SKILL.md").write_text("---\nname: demo-skill\ndescription: A demo skill\n---\nBODY")
+    cmd = load_skill.func(_runtime(atom_home), name="demo-skill")
+    assert cmd.update["promoted_skills"] == ["demo-skill"]
+    assert "Loaded skill 'demo-skill'" in cmd.update["messages"][0].content
 
 
 def test_load_skill_rejects_unknown_and_traversal(atom_home):
@@ -43,10 +43,10 @@ def test_load_skill_message_names_skill_library_mount(atom_home):
 
 
 def test_load_skill_message_names_skills_mount_for_always_on(atom_home):
-    d = atom_home / "skills" / "logseq-cli"
+    d = atom_home / "skills" / "demo-skill"
     d.mkdir(parents=True)
-    (d / "SKILL.md").write_text("---\nname: logseq-cli\ndescription: x\n---\nBODY")
-    cmd = load_skill.func(_runtime(atom_home), name="logseq-cli")
+    (d / "SKILL.md").write_text("---\nname: demo-skill\ndescription: x\n---\nBODY")
+    cmd = load_skill.func(_runtime(atom_home), name="demo-skill")
     msg = str(cmd.update["messages"][0].content)
-    assert "/mnt/skills/logseq-cli/" in msg
+    assert "/mnt/skills/demo-skill/" in msg
     assert "/mnt/skill_library/" not in msg

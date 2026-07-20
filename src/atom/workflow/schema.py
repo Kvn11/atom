@@ -25,11 +25,11 @@ class InputDef(_Base):
 
 
 class NotesConfig(_Base):
-    """Opt-in persistent notes for a workflow (a per-workflow Logseq vault shared across runs)."""
+    """Opt-in persistent notes for a workflow, backed by a registered Obsidian vault."""
 
     enabled: bool = False
-    provider: Literal["logseq"] = "logseq"
-    graph: Optional[str] = None   # default (resolved in atom.notes): slug of the workflow name
+    provider: Literal["obsidian"] = "obsidian"
+    vault: Optional[str] = None   # registered vault name; defaults (in atom.notes) to the workflow name
 
 
 class TaskDef(_Base):

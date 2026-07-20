@@ -82,7 +82,7 @@ def load_skill(runtime: ToolRuntime, name: str) -> Command:
     Use a name shown in the skills catalog or returned by search_skills.
 
     Args:
-        name: The exact skill name to load (e.g. "logseq-cli").
+        name: The exact skill name to load (e.g. "curate-knowledge-base").
     """
     tcid = runtime.tool_call_id
     clean = (name or "").strip()

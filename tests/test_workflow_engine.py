@@ -331,8 +331,8 @@ async def test_notes_binding_forwarded_to_run_agent(base_config, atom_home, monk
 
     captured = {}
 
-    def fake_ensure(home, name, cfg, **k):
-        return NotesBinding(provider="logseq", root_dir="/x", graph="demo")
+    def fake_ensure(name, cfg, **k):
+        return NotesBinding(provider="obsidian", vault="demo", root_dir="/x")
 
     async def spy(prompt, **kwargs):
         captured["notes"] = kwargs.get("notes")
@@ -347,7 +347,7 @@ async def test_notes_binding_forwarded_to_run_agent(base_config, atom_home, monk
     engine = WorkflowEngine(base_config)
     engine.create_run(wf, {}, "runnotesfwd", "2026-07-03T00:00:00")
     await engine.execute("runnotesfwd")
-    assert captured["notes"] == {"provider": "logseq", "root_dir": "/x", "graph": "demo"}
+    assert captured["notes"] == {"provider": "obsidian", "vault": "demo", "root_dir": "/x"}
 
 
 @pytest.mark.asyncio
@@ -370,7 +370,7 @@ async def test_no_notes_forwards_none(base_config, atom_home, monkeypatch):
 @pytest.mark.asyncio
 async def test_notes_setup_failure_halts_run(base_config, atom_home, monkeypatch):
     def boom(*a, **k):
-        raise FileNotFoundError("logseq missing")
+        raise FileNotFoundError("obsidian missing")
 
     monkeypatch.setattr(engine_mod, "ensure_vault", boom)
     wf = WorkflowDef.model_validate({
@@ -380,7 +380,7 @@ async def test_notes_setup_failure_halts_run(base_config, atom_home, monkeypatch
     engine.create_run(wf, {}, "runnotesfail", "2026-07-03T00:00:00")
     manifest = await engine.execute("runnotesfail")
     assert manifest.status == "halted"
-    assert "logseq missing" in (manifest.steps[0].tasks[0].error or "")
+    assert "obsidian missing" in (manifest.steps[0].tasks[0].error or "")
 
 
 @pytest.mark.asyncio
