@@ -92,14 +92,14 @@ def test_child_agent_has_skill_tools_and_catalog(atom_home):
 
     runner = SubagentRunner(
         model=None, home=str(atom_home), context_window=100_000, bash_enabled=True,
-        skill_catalog=[{"name": "logseq-cli", "description": "Operate Logseq"}],
+        skill_catalog=[{"name": "demo-skill", "description": "A demo skill"}],
         has_skill_library=True,
     )
     for st in ("general-purpose", "bash"):
         names = [t.name for t in runner._child_tools(st)]
         assert "load_skill" in names and "search_skills" in names
     sys = runner._child_system("general-purpose")
-    assert "logseq-cli" in sys and "Operate Logseq" in sys
+    assert "demo-skill" in sys and "A demo skill" in sys
 
 
 def test_bash_child_prompt_includes_notes_vault(atom_home):
@@ -107,15 +107,15 @@ def test_bash_child_prompt_includes_notes_vault(atom_home):
 
     runner = SubagentRunner(
         model=None, home=str(atom_home), context_window=100_000, bash_enabled=True,
-        notes={"provider": "logseq", "root_dir": "/n/notes-smoke", "graph": "smoke-graph"},
+        notes={"provider": "obsidian", "vault": "smoke-vault", "root_dir": "/n/notes-smoke"},
     )
     bash_sys = runner._child_system("bash")
     assert "Persistent notes" in bash_sys
-    assert "smoke-graph" in bash_sys and "/n/notes-smoke" in bash_sys
+    assert "obsidian vault=smoke-vault" in bash_sys and "/n/notes-smoke" in bash_sys
     # General-purpose children have no bash and workspace-confined file tools, so they cannot reach
-    # the out-of-workspace vault via the logseq CLI -> they must NOT get a misleading vault block.
+    # the out-of-workspace vault via the obsidian CLI -> they must NOT get a misleading vault block.
     gp_sys = runner._child_system("general-purpose")
-    assert "Persistent notes" not in gp_sys and "smoke-graph" not in gp_sys
+    assert "Persistent notes" not in gp_sys and "smoke-vault" not in gp_sys
 
 
 def test_bash_child_prompt_omits_notes_block_when_absent(atom_home):
