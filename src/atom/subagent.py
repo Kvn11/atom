@@ -66,6 +66,10 @@ class SubagentRunner:
     skill_catalog: list = field(default_factory=list)  # [{"name","description"}] always-on catalog
     has_skill_library: bool = False      # a skill_library/ exists -> bind search_skills
     notes: dict | None = None            # per-workflow Logseq vault ctx (root_dir/graph); bash children only
+    overflow_recovery: bool = True
+    overflow_max_attempts: int = 3
+    overflow_target_ratio: float = 0.5
+    max_tool_output_chars: int = 100_000
 
     def __post_init__(self) -> None:
         self._sem = asyncio.Semaphore(clamp_concurrency(self.max_concurrent))
@@ -99,11 +103,13 @@ class SubagentRunner:
         """Pin the delegated prompt and add resilience (retry, compaction, dangling-call repair,
         tool-error, loop detection) so long-running children survive transient provider errors,
         context overflow, and loops."""
+        from atom.middleware.context_overflow import ContextOverflowMiddleware
         from atom.middleware.dangling_tool_call import DanglingToolCallMiddleware
         from atom.middleware.instruction_pin import InstructionPinMiddleware
         from atom.middleware.llm_error import LLMErrorHandlingMiddleware, RetryPolicy
         from atom.middleware.loop_detection import LoopDetectionMiddleware
         from atom.middleware.tool_error import ToolErrorHandlingMiddleware
+        from atom.middleware.tool_output_cap import ToolOutputCapMiddleware
 
         mw: list = [InstructionPinMiddleware(), DanglingToolCallMiddleware()]
         if self.summarizer is not None:
@@ -125,6 +131,13 @@ class SubagentRunner:
             mw.append(SkillLibraryMiddleware(self.home))
         mw += [
             LLMErrorHandlingMiddleware(self.retry or RetryPolicy()),  # retry, then raise on exhaustion
+            ContextOverflowMiddleware(                                # innermost model wrap
+                context_window=self.context_window,
+                max_attempts=self.overflow_max_attempts,
+                target_ratio=self.overflow_target_ratio,
+                enabled=self.overflow_recovery,
+            ),
+            ToolOutputCapMiddleware(self.max_tool_output_chars),      # outermost tool wrap
             ToolErrorHandlingMiddleware(),
             LoopDetectionMiddleware(),
         ]

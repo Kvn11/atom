@@ -7,10 +7,12 @@ import httpx
 import pytest
 
 from atom.middleware.llm_error import (
+    ContextOverflowError,
     LLMErrorHandlingMiddleware,
     ProviderUnavailableError,
     RetryingModel,
     RetryPolicy,
+    is_context_overflow,
     is_retryable,
     run_with_retry_async,
     run_with_retry_sync,
@@ -58,6 +60,19 @@ def test_retryable_string_markers():
     assert is_retryable(Exception("429 RESOURCE_EXHAUSTED: quota"))
     assert is_retryable(Exception("503 UNAVAILABLE"))
     assert not is_retryable(Exception("invalid api key"))
+
+
+def test_retryable_bare_numeric_status_strings():
+    assert is_retryable(Exception("429 Too Many Requests"))
+    assert is_retryable(Exception("502 Bad Gateway"))
+    assert is_retryable(Exception("HTTP 503"))
+    # a digit-substring inside a larger number must NOT count as a status code
+    assert not is_retryable(Exception("used 250000 tokens"))
+
+
+def test_overflow_and_retryable_stay_disjoint_on_anthropic_token_count():
+    exc = _Anthropic(400, "prompt is too long: 250000 tokens > 200000 maximum")
+    assert is_context_overflow(exc) and not is_retryable(exc)
 
 
 # ---- run_with_retry_sync ------------------------------------------------
@@ -217,3 +232,48 @@ def test_middleware_default_policy_is_20_retries():
     mw = LLMErrorHandlingMiddleware()
     assert mw.policy.max_retries == 20 and mw.policy.base_delay == 1.0
     assert mw.policy.max_delay == 30.0 and mw.policy.jitter is True
+
+
+# ---- is_context_overflow ------------------------------------------------
+
+def test_overflow_detects_gemini():
+    exc = _Gemini(400, "INVALID_ARGUMENT. The input token count (1052342) exceeds the maximum "
+                       "number of tokens allowed (1048576).")
+    assert is_context_overflow(exc) and not is_retryable(exc)
+
+
+def test_overflow_detects_anthropic():
+    exc = _Anthropic(400, "prompt is too long: 250000 tokens > 200000 maximum")
+    assert is_context_overflow(exc) and not is_retryable(exc)
+
+
+def test_overflow_detects_openai():
+    exc = Exception("Error code: 400 - context_length_exceeded: maximum context length is 128000 tokens")
+    assert is_context_overflow(exc) and not is_retryable(exc)
+
+
+def test_overflow_false_for_transient_and_unrelated():
+    assert not is_context_overflow(_Anthropic(429, "rate limit exceeded"))
+    assert not is_context_overflow(_Gemini(503, "UNAVAILABLE"))
+    assert not is_context_overflow(_Anthropic(400, "invalid api key"))
+    assert not is_context_overflow(_Anthropic(400, "bad request"))
+
+
+# ---- ContextOverflowError --------------------------------------------------
+
+def test_context_overflow_error_passes_through_sync_retry_core():
+    def raises():
+        raise ContextOverflowError(limit=1000, attempts=3, original=ValueError("too big"))
+    with pytest.raises(ContextOverflowError) as ei:
+        run_with_retry_sync(raises, RetryPolicy(max_retries=5), sleep=lambda d: None)
+    assert ei.value.limit == 1000 and ei.value.attempts == 3
+
+
+async def test_context_overflow_error_passes_through_async_retry_core():
+    async def raises():
+        raise ContextOverflowError(limit=42, attempts=1, original=ValueError("x"))
+
+    async def fake_sleep(d):
+        return None
+    with pytest.raises(ContextOverflowError):
+        await run_with_retry_async(raises, RetryPolicy(max_retries=5), sleep=fake_sleep)

@@ -257,3 +257,64 @@ def test_resolve_langfuse_keys_prefers_config_over_env(monkeypatch):
     )
     assert resolve_langfuse_keys(obs) == ("cfg_pk", "cfg_sk", "http://lf")
     assert resolve_langfuse_keys(ObservabilityConfig()) == ("env_pk", "env_sk", None)
+
+
+# --- truncating mask (task 2) -----------------------------------------------
+
+from atom.observability.provider import _make_truncating_mask
+
+
+def test_mask_truncates_big_string_leaf():
+    mask = _make_truncating_mask(100, 2_000_000)
+    out = mask(data={"input": "A" * 5000, "small": "ok"})
+    assert len(out["input"]) < 5000
+    assert "elided by atom size cap" in out["input"]
+    assert out["small"] == "ok"
+
+
+def test_mask_walks_nested_lists_and_dicts():
+    mask = _make_truncating_mask(50, 2_000_000)
+    out = mask(data={"messages": [{"text": "B" * 2000}]})
+    assert "elided by atom size cap" in out["messages"][0]["text"]
+
+
+def test_mask_outer_guard_replaces_giant_observation():
+    mask = _make_truncating_mask(10_000_000, 500)   # per-string cap huge; per-observation cap tiny
+    out = mask(data={"k": "C" * 5000})
+    assert isinstance(out, str) and "observation payload elided" in out
+
+
+def test_mask_never_raises_on_weird_data():
+    mask = _make_truncating_mask(100, 2_000_000)
+
+    class _Weird:
+        def __str__(self):
+            raise RuntimeError("nope")
+
+    out = mask(data=_Weird())        # must not raise
+    assert out is not None
+
+
+def test_default_factory_wires_the_mask(monkeypatch):
+    import langfuse
+    import langfuse.langchain
+    captured = {}
+
+    class _FakeLF:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    class _FakeCH:
+        def __init__(self, **kwargs):
+            pass
+
+    monkeypatch.setattr(langfuse, "Langfuse", _FakeLF)
+    monkeypatch.setattr(langfuse.langchain, "CallbackHandler", _FakeCH)
+
+    from atom.config.schema import LangfuseConfig
+    from atom.observability.provider import _default_langfuse_factory
+
+    _default_langfuse_factory(LangfuseConfig(), "pk", "sk")
+    assert "mask" in captured
+    masked = captured["mask"](data="Z" * 500_000)
+    assert len(masked) < 500_000       # the wired mask really truncates

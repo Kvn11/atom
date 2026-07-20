@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import random
+import re
 import time
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, TypeVar
@@ -22,12 +23,15 @@ from langchain_core.language_models import BaseChatModel
 T = TypeVar("T")
 
 _RETRYABLE_MARKERS = (
-    "429", "500", "502", "503", "504", "529",
     "overloaded", "rate limit", "rate_limit", "timeout", "timed out",
     "temporarily unavailable", "unavailable", "connection",
     "resource_exhausted", "resource exhausted", "internal", "deadline",
     "busy", "quota", "try again",
 )
+
+# Bare numeric HTTP status codes, digit-bounded so a real status (e.g. "502 Bad Gateway")
+# matches but a digit-substring inside a larger number (e.g. "250000 tokens") does not.
+_NUMERIC_STATUS_RE = re.compile(r"(?<!\d)(?:429|500|502|503|504|529)(?!\d)")
 
 
 class ProviderUnavailableError(Exception):
@@ -40,6 +44,23 @@ class ProviderUnavailableError(Exception):
         super().__init__(
             f"provider unavailable after {attempts} attempt(s): "
             f"{type(original).__name__}: {original}"
+        )
+
+
+class ContextOverflowError(Exception):
+    """Raised when a model call's input still exceeds the model's context window after emergency
+    compaction. Distinct from ProviderUnavailableError: the provider is healthy — the input is too
+    big — so retrying it unchanged is futile and it must not read as an outage."""
+
+    def __init__(self, *, limit: int, attempts: int, original: Exception):
+        self.limit = limit
+        self.attempts = attempts
+        self.original = original
+        super().__init__(
+            f"context window exceeded: input still over the model's ~{limit}-token limit after "
+            f"{attempts} emergency-compaction attempt(s); reduce input, raise compaction "
+            f"aggressiveness, or use a larger-window model "
+            f"({type(original).__name__}: {original})"
         )
 
 
@@ -61,7 +82,33 @@ def is_retryable(exc: Exception) -> bool:
     if isinstance(status, int) and (status == 429 or status >= 500):
         return True
     text = str(exc).lower()
+    if _NUMERIC_STATUS_RE.search(text):
+        return True
     return any(m in text for m in _RETRYABLE_MARKERS)
+
+
+_OVERFLOW_MARKERS = (
+    "input token count",                      # google-genai
+    "token count exceeds",                    # google-genai
+    "exceeds the maximum number of tokens",   # google-genai
+    "prompt is too long",                     # anthropic
+    "context_length_exceeded",                # openai
+    "maximum context length",                 # openai
+    "reduce the length of the messages",      # openai
+    "context window",
+    "context length",
+    "too many tokens",
+    "input is too long",
+    "maximum number of tokens",
+)
+
+
+def is_context_overflow(exc: Exception) -> bool:
+    """True if ``exc`` is a permanent-for-this-input context/token overflow — a 4xx the model will
+    reject again unless the input shrinks. Disjoint from :func:`is_retryable`: overflow is never a
+    transient retry, so it must not be looped with backoff (futile) nor mislabeled as an outage."""
+    text = str(exc).lower()
+    return any(m in text for m in _OVERFLOW_MARKERS)
 
 
 def _backoff_ceiling(attempt: int, policy: RetryPolicy) -> float:
@@ -79,6 +126,8 @@ def run_with_retry_sync(
         try:
             return call()
         except Exception as exc:  # noqa: BLE001
+            if isinstance(exc, ContextOverflowError):
+                raise
             if attempt >= policy.max_retries or not is_retryable(exc):
                 raise ProviderUnavailableError(exc, attempt + 1) from exc
             ceiling = _backoff_ceiling(attempt, policy)
@@ -97,6 +146,8 @@ async def run_with_retry_async(
         try:
             return await acall()
         except Exception as exc:  # noqa: BLE001
+            if isinstance(exc, ContextOverflowError):
+                raise
             if attempt >= policy.max_retries or not is_retryable(exc):
                 raise ProviderUnavailableError(exc, attempt + 1) from exc
             ceiling = _backoff_ceiling(attempt, policy)

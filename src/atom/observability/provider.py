@@ -11,14 +11,48 @@ break a run.
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
-from typing import Any
+from typing import Any, Callable
 
 from atom.config.schema import AtomConfig, ObservabilityConfig
 from atom.observability.trace import apply_observability_env, git_sha, tracing_active
 
 logger = logging.getLogger(__name__)
+
+_MASK_MARKER = "[…{elided} of {total} chars elided by atom size cap…]"
+
+
+def _walk_truncate(data: Any, max_field_chars: int) -> Any:
+    from atom.limits import truncate_text
+    if isinstance(data, str):
+        return truncate_text(data, max_chars=max_field_chars, marker_template=_MASK_MARKER)
+    if isinstance(data, dict):
+        return {k: _walk_truncate(v, max_field_chars) for k, v in data.items()}
+    if isinstance(data, (list, tuple)):
+        return [_walk_truncate(v, max_field_chars) for v in data]
+    return data
+
+
+def _make_truncating_mask(max_field_chars: int, max_observation_bytes: int) -> Callable[..., Any]:
+    """Build a LangFuse ``mask(*, data, **kwargs)`` that recursively truncates oversized string
+    fields, then guards a still-huge observation with a marker. Never raises — telemetry must not
+    break a run."""
+    def _mask(*, data: Any, **_kwargs: Any) -> Any:
+        try:
+            walked = _walk_truncate(data, max_field_chars)
+            try:
+                size = len(json.dumps(walked, default=str))
+            except Exception:  # noqa: BLE001
+                size = 0
+            if size > max_observation_bytes:
+                return (f"[atom: observation payload elided — ~{size} bytes exceeds the "
+                        f"{max_observation_bytes}-byte cap]")
+            return walked
+        except Exception:  # noqa: BLE001 — telemetry must never break a run
+            return data
+    return _mask
 
 
 class ObservabilityProvider:
@@ -118,6 +152,7 @@ def _default_langfuse_factory(lf: Any, public: str, secret: str) -> tuple[Any, A
         environment=lf.environment,
         release=lf.release or git_sha(),
         sample_rate=lf.sample_rate,
+        mask=_make_truncating_mask(lf.max_field_chars, lf.max_observation_bytes),
     )
     # update_trace=True is REQUIRED, not cosmetic. The SDK default (False) writes the run-config
     # metadata (agent_role / is_subagent / task_id / step_index — see trace.build_lead_trace) ONLY
