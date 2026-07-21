@@ -19,7 +19,7 @@ def test_workflow_loads_and_has_expected_shape():
     names = {i.name: i for i in wf.inputs}
     assert names["targets"].type == "file" and names["targets"].required
     assert names["capture"].type == "file" and names["capture"].required
-    assert len(wf.steps) == 1
+    assert wf.steps[0].title == "Setup"
     task_ids = {t.id for t in wf.steps[0].tasks}
     assert task_ids == {"capture_recon", "build_sdk"}
 
@@ -49,3 +49,35 @@ def test_leads_delegate_per_endpoint_to_bash_subagents():
         assert "delegate_task" in p
         assert 'subagent_type="bash"' in p          # bash children get shell + the vault CLI
         assert "COORDINATOR" in p and "Do NOT inspect" in p
+
+
+def test_has_hypothesize_and_test_steps():
+    wf = _load()
+    assert [s.title for s in wf.steps] == ["Setup", "Hypothesize", "Test"]
+    hyp = wf.steps[1].tasks
+    tst = wf.steps[2].tasks
+    assert [t.id for t in hyp] == ["hypothesize"]
+    assert [t.id for t in tst] == ["test"]
+    assert hyp[0].model == "gemini-3.5-flash" and tst[0].model == "gemini-3.5-flash"
+
+
+def _task(name):
+    return {t.id: t for s in _load().steps for t in s.tasks}[name].prompt
+
+
+def test_hypothesize_prompt_delegates_and_covers_privacy():
+    p = _task("hypothesize")
+    assert "COORDINATOR" in p and "delegate_task" in p and 'subagent_type="bash"' in p
+    assert "## Hypotheses" in p
+    assert "PII" in p and "privacy" in p.lower()
+    assert "vault_note.py append" in p
+
+
+def test_test_prompt_is_safe_by_default_with_antibot_and_blockers():
+    p = _task("test")
+    assert "COORDINATOR" in p and "delegate_task" in p and 'subagent_type="bash"' in p
+    assert "destructive-skipped" in p and "safe-by-default" in p.lower()
+    assert "burp.py identities" in p          # capture is the identity roster (T3)
+    assert "burp.py cred" in p and "$(" in p  # raw token only via $(...) capture
+    assert "mint-once" in p.lower()           # anti-bot rules present
+    assert "vault_note.py blocker" in p and "[[BLK-" in p
