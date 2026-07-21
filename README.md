@@ -94,6 +94,25 @@ open it in Obsidian first. The Obsidian app must be running during a run (the CL
 Try it with `workflows/notes-smoke.yaml`: register a vault named `notes-smoke` in Obsidian, then run
 the workflow twice — the second run's Recall step reads the first run's note.
 
+### API security assessment (ships with atom)
+
+`workflows/api-security-assessment.yaml` runs an **authorized** security & privacy assessment of your
+own API targets on a deliberately weak reasoning model (`gemini-pro` → gemini-2.5-pro; **never**
+Gemini 3, which refuses security work). Step 1 ("Setup") is two parallel tasks: one harvests reusable
+values (headers, cookies, decoded JWT claims, candidate IDs) from a Burp XML capture and inventories
+every observed API into the vault; the other builds a documented Python SDK from a targets scope file.
+Notes are **split by domain at the vault root** (`<domain>/recon.md`, `<domain>/endpoints/<slug>.md`).
+
+It ships with LLM-friendly CLI tooling (`skill_library/api-recon-toolkit/`) that **slices, never dumps**
+— so a weak model stays in-context over large captures and up-to-25-endpoint targets files. **Deploy two
+things:** copy `workflows/api-security-assessment.yaml` → `~/.atom/workflows/` **and**
+`skill_library/api-recon-toolkit/` → `~/.atom/skill_library/`, then register an Obsidian vault named
+`api-security-assessment`. Run with two file inputs:
+
+```bash
+atom workflow run api-security-assessment --file targets=./targets.json --file capture=./capture.xml
+```
+
 ### File inputs
 
 Declare a file input by giving it `type: file` alongside the usual `required`/`description`:
