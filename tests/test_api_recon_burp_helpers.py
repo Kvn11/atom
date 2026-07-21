@@ -1,21 +1,16 @@
 import sys
 from pathlib import Path
 
-SCRIPTS = Path(__file__).resolve().parents[1] / "skill_library" / "api-recon-toolkit" / "scripts"
+TESTS = Path(__file__).resolve().parent
+SCRIPTS = TESTS.parent / "skill_library" / "api-recon-toolkit" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
+sys.path.insert(0, str(TESTS))
 
 import _burp  # noqa: E402
+import _secassess_fixtures as fx  # noqa: E402
 
-EXAMPLE_XML = str(Path(__file__).resolve().parents[1] / "examples" / "account.vesync.com.xml")
-
-# The real authorizeCode JWT from the example capture (alg=HS256, aud=22134806).
-VESYNC_JWT = (
-    "eyJhbGciOiJIUzI1NiJ9."
-    "eyJpc3MiOiJ2ZXN5bmMuY29tIiwiYXVkIjoiMjIxMzQ4MDYiLCJ0ZXJtaW5hbElkIjoiMjI0OTQ4"
-    "NzVkM2Q3NTNjMTZhZjliZTg0MDgzNjhlZDM1IiwiZXhwIjoxNzc5Njc2MTE3MjQzLCJpYXQiOjE3"
-    "Nzk2NzUyMTcyNDMsImp0aSI6ImRiYTUxYTVlOGE2YzQ0NmRhMDFmZjVkY2QyMzU4OWViIn0."
-    "K8_5EbzSIglbdhrL2t1X8Tm5EX9idTZa-pet8e9-uPg"
-)
+# The synthetic capture's JWT (alg=HS256, aud=55501234).
+SAMPLE_JWT = fx.SAMPLE_JWT
 
 
 def test_endpoint_slug_basic():
@@ -28,14 +23,14 @@ def test_endpoint_slug_basic():
 
 
 def test_decode_jwt_claims_no_raw_token():
-    d = _burp.decode_jwt(VESYNC_JWT)
+    d = _burp.decode_jwt(SAMPLE_JWT)
     assert d is not None
     assert d["alg"] == "HS256"
-    assert d["payload"]["aud"] == "22134806"
-    assert d["payload"]["iss"] == "vesync.com"
+    assert d["payload"]["aud"] == "55501234"
+    assert d["payload"]["iss"] == "example.com"
     assert d["sig_bytes"] == 32  # HS256 signature is 32 bytes
     # the raw token must never be echoed back inside the decoded structure
-    assert VESYNC_JWT not in repr(d)
+    assert SAMPLE_JWT not in repr(d)
 
 
 def test_decode_jwt_rejects_garbage():
@@ -45,16 +40,17 @@ def test_decode_jwt_rejects_garbage():
 
 def test_find_jwts_extracts_from_noisy_text():
     # the capture prefixes the JWT with digits ("30410011eyJ...") — still found
-    found = _burp.find_jwts("authorizeCode=30410011" + VESYNC_JWT + "&lang=en")
-    assert VESYNC_JWT in found
+    found = _burp.find_jwts("authorizeCode=30410011" + SAMPLE_JWT + "&lang=en")
+    assert SAMPLE_JWT in found
 
 
-def test_is_asset_filters_static_but_keeps_api_doc():
-    items = list(_burp.iter_items(EXAMPLE_XML))
-    assert len(items) == 23
+def test_is_asset_filters_static_but_keeps_apis(tmp_path):
+    xml = fx.write_capture(tmp_path)
+    items = list(_burp.iter_items(xml))
+    assert len(items) == 4
     assets = [it for it in items if _burp.is_asset(it)]
     apis = [it for it in items if not _burp.is_asset(it)]
-    # 22 static assets (js/css/svg/config.js), 1 kept (the GET / delAccount HTML doc)
-    assert len(apis) == 1
-    assert apis[0].index == 22
-    assert len(assets) == 22
+    # 2 static assets (js/css) filtered out; 2 API items kept (the HTML doc + the JSON POST)
+    assert len(assets) == 2
+    assert {it.index for it in assets} == {0, 1}
+    assert {it.index for it in apis} == {2, 3}

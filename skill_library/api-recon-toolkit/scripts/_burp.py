@@ -319,6 +319,18 @@ def find_jwts(text: str) -> list[str]:
     return seen
 
 
+def redact_tokens(text: str) -> str:
+    """Replace JWT-shaped substrings with a short non-sensitive marker for DISPLAY.
+
+    Keeps a 12-char prefix (the JWT header is not secret) so an analyst can still recognize
+    and correlate the token, without dumping the full payload+signature into notes/summaries.
+    Extraction paths (find_jwts/decode_jwt/harvest) operate on the raw text, not this output.
+    """
+    if not text:
+        return text
+    return _JWT_RE.sub(lambda m: m.group(0)[:12] + "…<JWT redacted>", text)
+
+
 def _b64url(seg: str) -> bytes:
     return _base64.urlsafe_b64decode(seg + "=" * (-len(seg) % 4))
 

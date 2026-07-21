@@ -29,6 +29,7 @@ _SHORT = 200  # header/cookie sample truncation
 
 
 def _short(v: str, n: int = _SHORT) -> str:
+    v = _burp.redact_tokens(v)
     return v if len(v) <= n else f"{v[:n]}... [+{len(v) - n} chars]"
 
 
@@ -52,7 +53,7 @@ def _rows(args):
         if args.url_contains and args.url_contains.lower() not in (it.url or "").lower():
             continue
         yield {"index": it.index, "method": it.method, "status": it.status,
-               "mimetype": it.mimetype, "url": it.url}
+               "mimetype": it.mimetype, "url": _burp.redact_tokens(it.url or "")}
 
 
 def cmd_index(args) -> int:
@@ -76,7 +77,7 @@ def _find_item(xml_path, index):
 
 
 def _print_headers(label, msg):
-    print(f"--- {label} headers ({msg.start_line}) ---")
+    print(f"--- {label} headers ({_burp.redact_tokens(msg.start_line)}) ---")
     for k, v in msg.headers:
         print(f"{k}: {_short(v)}")
 
@@ -101,10 +102,10 @@ def _print_body(label, msg, limit, keys_only):
             print(_burp.truncate_text(msg.body_text(), limit))
             return
         print(_burp.json_keys_summary(value) if keys_only
-              else _burp.truncate_text(json.dumps(value, indent=2, ensure_ascii=False), limit))
+              else _burp.redact_tokens(_burp.truncate_text(json.dumps(value, indent=2, ensure_ascii=False), limit)))
         return
     if msg.is_text():
-        print(_burp.truncate_text(msg.body_text(), limit))
+        print(_burp.redact_tokens(_burp.truncate_text(msg.body_text(), limit)))
         return
     print(f"[binary; first {min(len(msg.body), limit)} bytes hex]\n{msg.body[:limit].hex()}")
 
@@ -139,7 +140,7 @@ def _decode_auth(it):
 def cmd_view(args) -> int:
     it = _find_item(args.xml, args.index)
     resp = it.response
-    print(f"# {it.method} {it.url}")
+    print(f"# {it.method} {_burp.redact_tokens(it.url or '')}")
     print(f"  status: {it.status}  mime: {it.mimetype}")
     print(f"  request: {len(it.request.headers)} headers, {len(it.request.body)} body bytes")
     print(f"  response: {'none' if resp is None else str(len(resp.headers)) + ' headers, ' + str(len(resp.body)) + ' body bytes'}")
