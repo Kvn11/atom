@@ -62,7 +62,10 @@ def read_jsonl(path: str) -> list:
     if not p.exists():
         return []
     out = []
-    for line in p.read_text(encoding="utf-8").splitlines():
+    # split on "\n" only (the exact delimiter append_jsonl writes). str.splitlines() would ALSO
+    # break on U+2028/U+2029/U+0085, fragmenting any record whose text contains one and crashing
+    # json.loads — those chars legitimately appear in API JSON bodies / LLM-authored descriptions.
+    for line in p.read_text(encoding="utf-8").split("\n"):
         line = line.strip()
         if line:
             out.append(json.loads(line))
@@ -82,8 +85,12 @@ def append_jsonl(path: str, obj) -> Path:
 
 
 def cmd_add(args) -> int:
-    obj = json.loads(Path(args.from_file).read_text(encoding="utf-8"))
-    finding = validate_finding(obj)
+    try:
+        obj = json.loads(Path(args.from_file).read_text(encoding="utf-8"))
+        finding = validate_finding(obj)      # ValueError (incl. JSONDecodeError) -> clean exit 2
+    except ValueError as e:
+        print(f"error: invalid finding: {e}", file=sys.stderr)
+        return 2
     bad = has_raw_jwt(finding)
     if bad:
         print(f"error: raw JWT in field '{bad}' — evidence must be tokenless "

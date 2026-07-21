@@ -77,6 +77,16 @@ def test_confirm_prompt_reproduces_and_gates():
     assert "confirmed-findings.jsonl" in p and "discarded-findings.jsonl" in p
     assert "verbatim" in p.lower()                 # evidence commands run exactly as recorded
     assert "0 findings" in p or "nothing to confirm" in p.lower()   # zero-finding graceful path
+    # the deliverable must exist even when EVERY finding is discarded (not just when zero were emitted)
+    assert "even if" in p.lower() and "discarded" in p.lower()
+    # the Confirm sub-agent has its OWN destructive gate (the lead can't see per-finding evidence)
+    assert "SAFETY GATE" in p and "not re-sent" in p.lower()
+
+
+def test_test_findings_evidence_mints_any_credential():
+    # evidence must never hardcode a live credential — cookies/headers are minted inline too
+    p = _task("test")
+    assert "--field cookie" in p
 
 
 def _task(name):

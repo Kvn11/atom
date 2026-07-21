@@ -43,8 +43,38 @@ def test_has_raw_jwt_flags_evidence():
     assert findings.has_raw_jwt(_finding()) is None
 
 
+def test_has_raw_jwt_flags_title_and_description():
+    # the guard must cover the prose fields too — a weak model may paste a token into a description
+    assert findings.has_raw_jwt(_finding(title=f"leak via {fx.SAMPLE_JWT}")) == "title"
+    assert findings.has_raw_jwt(_finding(description=f"attacker with {fx.SAMPLE_JWT} reads victim")) == "description"
+
+
+def test_add_rejects_raw_jwt_in_description(tmp_path):
+    fj = tmp_path / "f.json"; jl = tmp_path / "findings.jsonl"
+    fj.write_text(json.dumps(_finding(description=f"the token {fx.SAMPLE_JWT} works")), encoding="utf-8")
+    r = _cli("add", "--from", str(fj), "--to", str(jl))
+    assert r.returncode != 0 and "description" in r.stderr
+    assert findings.read_jsonl(str(jl)) == []
+
+
 def test_read_jsonl_missing_is_empty(tmp_path):
     assert findings.read_jsonl(str(tmp_path / "nope.jsonl")) == []
+
+
+def test_roundtrip_survives_unicode_line_separator(tmp_path):
+    # U+2028 in finding text must not fragment the record on read (splitlines would break it)
+    jl = tmp_path / "findings.jsonl"
+    desc = "leaked another user's record:\u2028{...}"
+    findings.append_jsonl(str(jl), findings.validate_finding(_finding(description=desc)))
+    rows = findings.read_jsonl(str(jl))
+    assert len(rows) == 1 and rows[0]["description"] == desc
+
+def test_add_invalid_confirmed_exits_cleanly(tmp_path):
+    fj = tmp_path / "f.json"; jl = tmp_path / "findings.jsonl"
+    fj.write_text(json.dumps(_finding(confirmed=2)), encoding="utf-8")
+    r = _cli("add", "--from", str(fj), "--to", str(jl))
+    assert r.returncode == 2 and "Traceback" not in r.stderr and "invalid finding" in r.stderr
+    assert findings.read_jsonl(str(jl)) == []
 
 
 def test_add_appends_and_defaults(tmp_path):
@@ -110,3 +140,14 @@ def test_discard_records_reason_and_redacts_output(tmp_path):
     row = findings.read_jsonl(str(disc))[0]
     assert row["confirmed"] is False and "not reproducible" in row["reason"]
     assert fx.SAMPLE_JWT not in row["repro_output"] and "JWT redacted" in row["repro_output"]
+
+
+def test_discard_redacts_jwt_in_reason(tmp_path):
+    # design intent #2: the operator-supplied reason is a deliverable field and must be JWT-redacted
+    raw = tmp_path / "raw.jsonl"; disc = tmp_path / "discarded.jsonl"
+    findings.append_jsonl(str(raw), findings.validate_finding(_finding(title="drop me")))
+    r = _cli("discard", "--from", str(raw), "--index", "0", "--to", str(disc),
+             "--reason", f"server accepted token {fx.SAMPLE_JWT} for attacker")
+    assert r.returncode == 0
+    row = findings.read_jsonl(str(disc))[0]
+    assert fx.SAMPLE_JWT not in row["reason"] and "JWT redacted" in row["reason"]

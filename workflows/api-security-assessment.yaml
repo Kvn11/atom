@@ -261,9 +261,15 @@ steps:
                   {"title": "<one-line vuln title>",
                    "description": "<what an unauthorized caller obtains and why it is a vuln — PII by field name, never raw values>",
                    "evidence": ["<the EXACT tokenless one-liner that reproduced it: TOKEN=$(python3 /mnt/skill_library/api-recon-toolkit/scripts/burp.py cred {{ capture }} --index <IDENTITY_INDEX> --field authorization); curl -sS -X <METHOD> 'https://<HOST><path>' -H \"Authorization: $TOKEN\" -H 'User-Agent: <UA>' <other headers>>"]}
-                NEVER put a raw token in evidence — mint it inline with $(...). Then append it:
+                NEVER put a live credential in evidence — mint EVERY credential inline with $(...), not
+                just the bearer token. If the endpoint authenticates by cookie or another captured header
+                instead of (or in addition to) Authorization, mint THAT too and reference the variable:
+                  COOKIE=$(python3 /mnt/skill_library/api-recon-toolkit/scripts/burp.py cred {{ capture }} --index <IDENTITY_INDEX> --field cookie); curl ... -H "Cookie: $COOKIE"
+                (or --field header:<NAME> for any other auth header). No raw cookie/token/session value
+                may appear as a literal in evidence. Then append it:
                   python3 /mnt/skill_library/api-recon-toolkit/scripts/findings.py add --from {{ workspace }}/test/<slug>.<Hn>.finding.json --to {{ workspace }}/findings.jsonl
-                (findings.py REJECTS a raw JWT — if it errors, fix the evidence to use $(...).)
+                (findings.py REJECTS a raw JWT — if it errors, or if any credential is a literal, fix the
+                evidence to mint it with $(...).)
             4. For every blocker you hit, register it (idempotent). Write a one-line description to
                {{ workspace }}/test/<slug>.blk.md, then:
                  python3 /mnt/skill_library/api-recon-toolkit/scripts/vault_note.py blocker --vault api-security-assessment --domain <HOST> --id <blocker-slug> --endpoint <slug> --desc-from {{ workspace }}/test/<slug>.blk.md
@@ -299,6 +305,11 @@ steps:
           {{ outputs }}/confirmation-summary.md saying "Test emitted 0 findings; nothing to confirm",
           call present_files on both, and STOP (do not delegate).
 
+          Otherwise (>=1 finding): FIRST create an empty {{ outputs }}/confirmed-findings.jsonl now
+          (write_file with "") so the deliverable exists even if EVERY finding is later discarded — a
+          `findings.py confirm` only ever appends, so nothing creates this file when no finding is
+          confirmed. Then proceed to STEP B.
+
           SAFETY: reproduction is live but SAFE-BY-DEFAULT. If a finding's evidence is destructive
           /mutating, do NOT re-send it — discard it with reason "destructive — not re-sent".
           ANTI-BOT: mint-once (reuse the captured token; re-mint only on a 401), corpus User-Agent,
@@ -313,7 +324,13 @@ steps:
             Raw findings: {{ workspace }}/findings.jsonl. Anti-bot rules: <RULES>.
             1. Read the finding (title, description, evidence commands):
                  python3 /mnt/skill_library/api-recon-toolkit/scripts/findings.py show {{ workspace }}/findings.jsonl --index <N>
-            2. Run EACH evidence command VERBATIM, one per bash call (each is a self-contained
+            1b. SAFETY GATE (safe-by-default) — inspect the evidence commands BEFORE running anything. If
+                ANY command is destructive or state-changing — an HTTP method other than GET/HEAD/OPTIONS
+                (POST/PUT/PATCH/DELETE), or a path/verb that mutates (create/update/delete/cancel/reset/
+                purchase/password/email) — do NOT run it. Discard the finding and STOP:
+                  python3 /mnt/skill_library/api-recon-toolkit/scripts/findings.py discard --from {{ workspace }}/findings.jsonl --index <N> --to {{ outputs }}/discarded-findings.jsonl --reason "destructive — not re-sent"
+                Then reply "F<N> -> discarded (destructive — not re-sent)" and do nothing else.
+            2. Otherwise run EACH evidence command VERBATIM, one per bash call (each is a self-contained
                TOKEN=$(...); curl ... one-liner — the $TOKEN capture only works within a single call).
                Do not edit the commands except to obey the anti-bot rules.
             3. Decide: does the response REPRODUCE the vulnerability in `description`? For a privacy/IDOR
