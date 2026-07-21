@@ -53,12 +53,30 @@ def test_leads_delegate_per_endpoint_to_bash_subagents():
 
 def test_has_hypothesize_and_test_steps():
     wf = _load()
-    assert [s.title for s in wf.steps] == ["Setup", "Hypothesize", "Test"]
+    assert [s.title for s in wf.steps] == ["Setup", "Hypothesize", "Test", "Confirm"]
     hyp = wf.steps[1].tasks
     tst = wf.steps[2].tasks
     assert [t.id for t in hyp] == ["hypothesize"]
     assert [t.id for t in tst] == ["test"]
     assert hyp[0].model == "gemini-3.5-flash" and tst[0].model == "gemini-3.5-flash"
+
+
+def test_has_confirm_step():
+    wf = _load()
+    assert wf.steps[3].title == "Confirm"
+    conf = wf.steps[3].tasks
+    assert [t.id for t in conf] == ["confirm"]
+    assert conf[0].model == "gemini-3.5-flash"
+
+
+def test_confirm_prompt_reproduces_and_gates():
+    p = _task("confirm")
+    assert "COORDINATOR" in p and "delegate_task" in p and 'subagent_type="bash"' in p
+    assert "findings.py list" in p and "findings.py show" in p
+    assert "findings.py confirm" in p and "findings.py discard" in p
+    assert "confirmed-findings.jsonl" in p and "discarded-findings.jsonl" in p
+    assert "verbatim" in p.lower()                 # evidence commands run exactly as recorded
+    assert "0 findings" in p or "nothing to confirm" in p.lower()   # zero-finding graceful path
 
 
 def _task(name):
