@@ -65,6 +65,20 @@ def _task(name):
     return {t.id: t for s in _load().steps for t in s.tasks}[name].prompt
 
 
+def test_setup_and_hypothesize_are_rerun_safe():
+    tasks = {t.id: t for s in _load().steps for t in s.tasks}
+    recon = tasks["capture_recon"].prompt
+    hyp = tasks["hypothesize"].prompt
+    # endpoint notes are create-if-missing (never re-clobber a prior assessment's note)
+    assert "--if-missing" in recon and "--overwrite" not in recon
+    assert "--if-missing" in hyp
+    # recon.md accumulates a dated section instead of overwriting
+    assert "vault_note.py append" in recon and "--kind recon" in recon
+    assert "## Recon — {{ date }}" in recon
+    # appended endpoint sections are date-stamped so re-assessment stacks, not duplicates
+    assert "## Hypotheses — {{ date }}" in hyp
+
+
 def test_hypothesize_prompt_delegates_and_covers_privacy():
     p = _task("hypothesize")
     assert "COORDINATOR" in p and "delegate_task" in p and 'subagent_type="bash"' in p

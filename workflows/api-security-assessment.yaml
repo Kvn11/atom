@@ -41,12 +41,14 @@ steps:
           STEP B — harvest reusable values (you do this):
             python3 /mnt/skill_library/api-recon-toolkit/scripts/burp.py harvest {{ capture }} --format json
           Save the JSON to {{ workspace }}/recon/values.json (write_file). Then, for EACH domain, write a
-          recon note to {{ workspace }}/recon/<domain>.recon.md with sections: Base URLs, Reusable headers,
-          Cookies, Auth/JWT shapes (claims only — NEVER a raw token), Candidate identifiers (real IDs
-          reusable as required fields when testing targets), Oracles. File it:
-            python3 /mnt/skill_library/api-recon-toolkit/scripts/vault_note.py put \
+          recon section to {{ workspace }}/recon/<domain>.recon.md whose FIRST line is the heading
+          "## Recon — {{ date }}" followed by: Base URLs, Reusable headers, Cookies, Auth/JWT shapes
+          (claims only — NEVER a raw token), Candidate identifiers (real IDs reusable as required fields
+          when testing targets), Oracles. APPEND it — this domain may already have recon from a prior
+          assessment, and appending preserves it (a fresh run stacks under its own dated heading):
+            python3 /mnt/skill_library/api-recon-toolkit/scripts/vault_note.py append \
               --vault api-security-assessment --domain <domain> --kind recon \
-              --from {{ workspace }}/recon/<domain>.recon.md --overwrite
+              --from {{ workspace }}/recon/<domain>.recon.md
 
           STEP C — DELEGATE one sub-agent PER observed endpoint. For EACH item in the STEP A list, call
           the delegate_task tool. You MUST set subagent_type="bash" (a general-purpose sub-agent has no
@@ -82,11 +84,14 @@ steps:
                  ## Oracle
                  <does it confirm the validity/existence of some data? one line + why>
                  ## Observations
-            4. File the note into the vault:
+            4. File the note into the vault (create-if-missing — a prior assessment may already have
+               documented this endpoint; do NOT clobber its hypotheses/tests):
                  python3 /mnt/skill_library/api-recon-toolkit/scripts/vault_note.py put \
                    --vault api-security-assessment --domain <HOST> --slug <slug> \
-                   --from {{ workspace }}/endpoints/<slug>.md --overwrite
-            5. Reply with ONE line: "<METHOD> <PATH> -> oracle=<yes|no|unknown>".
+                   --from {{ workspace }}/endpoints/<slug>.md --if-missing
+               If it prints "NOOP: note exists" the endpoint was documented in a prior run — that is
+               fine; leave the existing note as-is and do not try to replace it.
+            5. Reply with ONE line: "<METHOD> <PATH> -> oracle=<yes|no|unknown> (new|prior-run)".
 
           STEP D — summarize (you do this): after every sub-agent has reported, write
           {{ outputs }}/recon-summary.md listing each domain, the number of endpoints documented, and the
@@ -168,14 +173,14 @@ steps:
                frontmatter (endpoint: <METHOD> <PATH> / domain: <HOST> / auth: unknown / oracle: unknown /
                status: target / tags: [api-recon]) plus "## Request shape" and "## Response shape" from
                step 1, then file it:
-                 python3 /mnt/skill_library/api-recon-toolkit/scripts/vault_note.py put --vault api-security-assessment --domain <HOST> --slug <slug> --from {{ workspace }}/hyp/<slug>.md --overwrite
+                 python3 /mnt/skill_library/api-recon-toolkit/scripts/vault_note.py put --vault api-security-assessment --domain <HOST> --slug <slug> --from {{ workspace }}/hyp/<slug>.md --if-missing
             3. Develop hypotheses from the endpoint shape + {{ workspace }}/recon/values.json (reusable IDs
                and other identities). Cover each category with one hypothesis where plausible (else write
                "N/A — reason"): IDOR/BOLA, mass-assignment, broken authn/authz, injection
                (SQLi/XSS/SSRF/path/command), and ALWAYS a PRIVACY hypothesis — "can an unauthorized user
                obtain another user's PII via this endpoint?".
             4. Write the hypotheses to {{ workspace }}/hyp/<slug>.hyp.md (write_file) as:
-                 ## Hypotheses
+                 ## Hypotheses — {{ date }}
                  ### H1 — <category> — <one-line theory>
                  - Probe: <concrete request: method, path, which identity, key params/body>
                  - Privacy? <yes/no>
