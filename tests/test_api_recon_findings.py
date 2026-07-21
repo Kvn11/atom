@@ -88,3 +88,25 @@ def test_show_full(tmp_path):
     findings.append_jsonl(str(jl), findings.validate_finding(_finding(description="SEEME")))
     r = _cli("show", str(jl), "--index", "0")
     assert r.returncode == 0 and "SEEME" in r.stdout
+
+
+def test_confirm_copies_with_true(tmp_path):
+    raw = tmp_path / "raw.jsonl"; conf = tmp_path / "confirmed.jsonl"
+    findings.append_jsonl(str(raw), findings.validate_finding(_finding(title="keep me")))
+    r = _cli("confirm", "--from", str(raw), "--index", "0", "--to", str(conf))
+    assert r.returncode == 0 and r.stdout.startswith("OK: confirmed")
+    rows = findings.read_jsonl(str(conf))
+    assert rows[0]["confirmed"] is True and rows[0]["title"] == "keep me"
+
+
+def test_discard_records_reason_and_redacts_output(tmp_path):
+    raw = tmp_path / "raw.jsonl"; disc = tmp_path / "discarded.jsonl"
+    out = tmp_path / "out.txt"
+    out.write_text(f"HTTP/2 200\nleaked {fx.SAMPLE_JWT}\n", encoding="utf-8")
+    findings.append_jsonl(str(raw), findings.validate_finding(_finding(title="drop me")))
+    r = _cli("discard", "--from", str(raw), "--index", "0", "--to", str(disc),
+             "--reason", "403 for attacker; not reproducible", "--output-from", str(out))
+    assert r.returncode == 0 and r.stdout.startswith("OK: discarded")
+    row = findings.read_jsonl(str(disc))[0]
+    assert row["confirmed"] is False and "not reproducible" in row["reason"]
+    assert fx.SAMPLE_JWT not in row["repro_output"] and "JWT redacted" in row["repro_output"]

@@ -118,6 +118,29 @@ def cmd_show(args) -> int:
     return 0
 
 
+def _pick(rows, index):
+    if not 0 <= index < len(rows):
+        raise SystemExit(f"index {index} out of range (have {len(rows)})")
+    return dict(rows[index])
+
+
+def cmd_confirm(args) -> int:
+    obj = _pick(read_jsonl(args.from_file), args.index)
+    obj["confirmed"] = True
+    print(f"OK: confirmed F{args.index} -> {append_jsonl(args.to, obj)}")
+    return 0
+
+
+def cmd_discard(args) -> int:
+    obj = _pick(read_jsonl(args.from_file), args.index)
+    obj["confirmed"] = False
+    obj["reason"] = _burp.redact_tokens(args.reason or "")
+    if args.output_from:
+        obj["repro_output"] = _burp.redact_tokens(Path(args.output_from).read_text(encoding="utf-8"))
+    print(f"OK: discarded F{args.index} -> {append_jsonl(args.to, obj)}")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -127,6 +150,13 @@ def main() -> int:
     p.add_argument("--format", choices=["text", "json"], default="text"); p.set_defaults(fn=cmd_list)
     p = sub.add_parser("show"); p.add_argument("jsonl")
     p.add_argument("--index", type=int, required=True); p.set_defaults(fn=cmd_show)
+    p = sub.add_parser("confirm"); p.add_argument("--from", dest="from_file", required=True)
+    p.add_argument("--index", type=int, required=True); p.add_argument("--to", required=True)
+    p.set_defaults(fn=cmd_confirm)
+    p = sub.add_parser("discard"); p.add_argument("--from", dest="from_file", required=True)
+    p.add_argument("--index", type=int, required=True); p.add_argument("--to", required=True)
+    p.add_argument("--reason", required=True); p.add_argument("--output-from", dest="output_from")
+    p.set_defaults(fn=cmd_discard)
     args = ap.parse_args()
     return args.fn(args)
 
