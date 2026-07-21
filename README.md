@@ -105,6 +105,13 @@ sub-agents** (`delegate_task`) rather than inspecting APIs itself — this keeps
 recursion limit. Notes are **split by domain at the vault root** (`<domain>/recon.md`,
 `<domain>/endpoints/<slug>.md`).
 
+Two further steps then run in the same pipeline: **Hypothesize** fans out per target API to write
+security + privacy (PII-for-unauthorized-user) hypotheses into each endpoint note first, and **Test**
+fans out per target API to live-test them **safe-by-default** (non-destructive only; destructive probes
+are documented, never sent) using the capture's in-scope identities. Blockers are their own notes
+(`<domain>/blockers/BLK-<slug>.md`) with an affected-endpoints list, so clearing a blocker maps to every
+endpoint it unblocked.
+
 It ships with LLM-friendly CLI tooling (`skill_library/api-recon-toolkit/`) that **slices, never dumps**
 — so a weak model stays in-context over large captures and up-to-25-endpoint targets files. **Deploy two
 things:** copy `workflows/api-security-assessment.yaml` → `~/.atom/workflows/` **and**
