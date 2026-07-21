@@ -9,6 +9,7 @@ capability flags come from the live ``model.profile`` at runtime (see
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -55,6 +56,10 @@ REGISTRY: dict[str, ModelSpec] = {
     "gemini-flash": ModelSpec("gemini-flash", "google_genai", "gemini-2.5-flash",
                               "google_genai:gemini-2.5-flash", 1_000_000, 65_536, True, True,
                               "GOOGLE_API_KEY"),
+    # Gemini 3.5 Flash — reasoning-capable; uses the thinking_level enum, not thinking_budget.
+    "gemini-3.5-flash": ModelSpec("gemini-3.5-flash", "google_genai", "gemini-3.5-flash",
+                                  "google_genai:gemini-3.5-flash", 1_000_000, 65_536, True, True,
+                                  "GOOGLE_API_KEY"),
     # --- Alibaba Qwen (DashScope) — profile usually absent, so fallbacks matter ---
     "qwen-max": ModelSpec("qwen-max", "qwen", "qwen-max", None, 262_144, 32_768, False, True,
                           "DASHSCOPE_API_KEY", base_url=DASHSCOPE_INTL),
@@ -91,6 +96,25 @@ def clamp_concurrency(n: int) -> int:
 
 # Effort level -> token budget, shared across providers that take a numeric budget.
 _EFFORT_BUDGETS = {"minimal": 1024, "low": 4096, "medium": 8192, "high": 24576}
+
+_GEMINI_VER_RE = re.compile(r"gemini-(\d+)")
+
+
+def _is_gemini_3_plus(model_name: str) -> bool:
+    """True for Gemini 3.x+ models, which use the ``thinking_level`` enum instead of an int budget."""
+    m = _GEMINI_VER_RE.search(model_name or "")
+    return bool(m) and int(m.group(1)) >= 3
+
+
+def _budget_to_level(budget: int) -> str:
+    """Map an int thinking budget to the nearest Gemini-3 ``thinking_level`` bucket."""
+    if budget >= _EFFORT_BUDGETS["high"]:
+        return "high"
+    if budget >= _EFFORT_BUDGETS["medium"]:
+        return "medium"
+    if budget >= _EFFORT_BUDGETS["low"]:
+        return "low"
+    return "minimal"
 
 
 def _coerce_thinking(thinking: Any) -> Any:
@@ -137,6 +161,14 @@ def _thinking_overrides(spec: ModelSpec, thinking: Any) -> dict[str, Any]:
         return {"reasoning_effort": thinking if thinking in _EFFORT_BUDGETS else "medium"}
 
     if spec.provider == "google_genai":
+        # Gemini 3+ replaced the integer thinking_budget with a thinking_level enum
+        # (minimal/low/medium/high); thinking_budget is deprecated for those models.
+        if _is_gemini_3_plus(spec.model_name):
+            if off:
+                return {"thinking_level": "minimal"}  # 3+ cannot fully disable thinking; floor it
+            if isinstance(thinking, int):
+                return {"thinking_level": _budget_to_level(thinking)}
+            return {"thinking_level": thinking if thinking in _EFFORT_BUDGETS else "medium"}
         if off:
             return {"thinking_budget": 0}
         if isinstance(thinking, int):

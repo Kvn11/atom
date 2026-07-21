@@ -97,11 +97,13 @@ the workflow twice — the second run's Recall step reads the first run's note.
 ### API security assessment (ships with atom)
 
 `workflows/api-security-assessment.yaml` runs an **authorized** security & privacy assessment of your
-own API targets on a deliberately weak reasoning model (`gemini-pro` → gemini-2.5-pro; **never**
-Gemini 3, which refuses security work). Step 1 ("Setup") is two parallel tasks: one harvests reusable
-values (headers, cookies, decoded JWT claims, candidate IDs) from a Burp XML capture and inventories
-every observed API into the vault; the other builds a documented Python SDK from a targets scope file.
-Notes are **split by domain at the vault root** (`<domain>/recon.md`, `<domain>/endpoints/<slug>.md`).
+own API targets on a weak reasoning model (`gemini-3.5-flash`). Step 1 ("Setup") is two parallel tasks:
+one harvests reusable values (headers, cookies, decoded JWT claims, candidate IDs) from a Burp XML
+capture and inventories every observed API into the vault; the other builds a documented Python SDK
+from a targets scope file. Each lead **coordinates and delegates the per-endpoint work to `bash`
+sub-agents** (`delegate_task`) rather than inspecting APIs itself — this keeps the lead well under its
+recursion limit. Notes are **split by domain at the vault root** (`<domain>/recon.md`,
+`<domain>/endpoints/<slug>.md`).
 
 It ships with LLM-friendly CLI tooling (`skill_library/api-recon-toolkit/`) that **slices, never dumps**
 — so a weak model stays in-context over large captures and up-to-25-endpoint targets files. **Deploy two

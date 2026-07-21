@@ -20,91 +20,113 @@ steps:
     description: In parallel — harvest reusable values + inventory observed APIs, and build the target SDK.
     tasks:
       - id: capture_recon
-        model: gemini-pro
+        model: gemini-3.5-flash
         thinking: high
         prompt: |
-          You are doing AUTHORIZED reconnaissance for a security assessment of APIs your org owns.
+          You are the LEAD agent coordinating AUTHORIZED reconnaissance of APIs your org owns.
           Your ONLY input this task is the Burp capture at: {{ capture }}
-          Tools live at /mnt/skill_library/api-recon-toolkit/scripts/ (run with python3 <abs path>).
-          Work in small steps and NEVER dump whole files — the CLIs slice for you.
+          The toolkit is at /mnt/skill_library/api-recon-toolkit/scripts/ (run with python3 <abs path>).
+          The persistent Obsidian vault is "api-security-assessment"; notes are split by DOMAIN at the
+          root: <domain>/recon.md and <domain>/endpoints/<slug>.md.
 
-          The persistent Obsidian vault is "api-security-assessment"; notes are split by DOMAIN at
-          the root: <domain>/recon.md and <domain>/endpoints/<slug>.md.
+          YOU ARE A COORDINATOR. Do NOT inspect individual endpoints yourself — running `burp.py view`
+          on many endpoints in your own context will hit the recursion limit. Inspecting and documenting
+          each endpoint is SUB-AGENT work (STEP C). Your job is: map, harvest, delegate, summarize.
 
-          STEP A — map the capture:
+          STEP A — map the capture (you do this):
             python3 /mnt/skill_library/api-recon-toolkit/scripts/burp.py hosts {{ capture }}
             python3 /mnt/skill_library/api-recon-toolkit/scripts/burp.py index {{ capture }} --apis-only --format json
+          Keep the resulting list of API items (each has an index, method, and url).
 
-          STEP B — harvest reusable values, once per domain seen:
+          STEP B — harvest reusable values (you do this):
             python3 /mnt/skill_library/api-recon-toolkit/scripts/burp.py harvest {{ capture }} --format json
-          Save the JSON to {{ workspace }}/recon/values.json (use write_file). Then, for EACH domain,
-          write a recon note body to {{ workspace }}/recon/<domain>.recon.md with sections:
-          Base URLs, Reusable headers, Cookies, Auth/JWT shapes (claims only — NEVER a raw token),
-          Candidate identifiers (real IDs reusable as required fields when testing targets), Oracles.
-          File it:
+          Save the JSON to {{ workspace }}/recon/values.json (write_file). Then, for EACH domain, write a
+          recon note to {{ workspace }}/recon/<domain>.recon.md with sections: Base URLs, Reusable headers,
+          Cookies, Auth/JWT shapes (claims only — NEVER a raw token), Candidate identifiers (real IDs
+          reusable as required fields when testing targets), Oracles. File it:
             python3 /mnt/skill_library/api-recon-toolkit/scripts/vault_note.py put \
               --vault api-security-assessment --domain <domain> --kind recon \
               --from {{ workspace }}/recon/<domain>.recon.md --overwrite
 
-          STEP C — inventory every observed (non-asset) API. Do them ONE AT A TIME so you never hold
-          more than one endpoint in context. For each index from the STEP A list:
-            python3 .../burp.py view {{ capture }} --index N --req-headers --resp-headers --cookies
-            python3 .../burp.py view {{ capture }} --index N --req-body --resp-body --keys
-            python3 .../burp.py view {{ capture }} --index N --decode-auth
-          Get the note filename stem:
-            python3 .../vault_note.py slug "<METHOD> <path>"
-          Write the note body to {{ workspace }}/endpoints/<slug>.md with this exact frontmatter+sections,
-          then file it. Template:
-            ---
-            endpoint: <METHOD> <path>
-            domain: <host>
-            auth: <scheme, e.g. Bearer JWT (alg=HS256) | session cookie | query authorizeCode | none>
-            oracle: <yes|no|unknown>
-            source: capture #<index>
-            status: observed
-            tags: [api-recon]
-            ---
-            # <METHOD> <path>
-            ## Request shape
-            ## Response shape
-            ## Headers
-            ## Auth
-            ## Oracle
-            <does it confirm the validity/existence of some data? one line + why>
-            ## Observations
-          File it:
-            python3 .../vault_note.py put --vault api-security-assessment --domain <host> \
-              --slug <slug> --from {{ workspace }}/endpoints/<slug>.md --overwrite
+          STEP C — DELEGATE one sub-agent PER observed endpoint. For EACH item in the STEP A list, call
+          the delegate_task tool. You MUST set subagent_type="bash" (a general-purpose sub-agent has no
+          shell and cannot run the toolkit — it will fail). Do NOT run `burp.py view` yourself. You may
+          issue several delegate_task calls together so the sub-agents run in parallel. Give each sub-agent
+          this EXACT prompt, substituting <INDEX>/<METHOD>/<PATH>/<HOST> for that item:
 
-          STEP D — finish: write {{ outputs }}/recon-summary.md listing each domain, the count of
-          endpoints documented, and the most useful reusable identifiers. Then call present_files on
-          {{ outputs }}/recon-summary.md. If the capture had no non-asset API items, say so plainly in
-          the summary and still record whatever cookies/JWTs harvest found.
+            You are documenting ONE API endpoint for an authorized security assessment. Do only this one.
+            Capture: {{ capture }}. Toolkit: /mnt/skill_library/api-recon-toolkit/scripts/.
+            Vault: api-security-assessment (notes split by domain at the root).
+            1. Inspect ONLY item index <INDEX> (view is truncated/redacted for you):
+                 python3 /mnt/skill_library/api-recon-toolkit/scripts/burp.py view {{ capture }} --index <INDEX> --req-headers --resp-headers --cookies
+                 python3 /mnt/skill_library/api-recon-toolkit/scripts/burp.py view {{ capture }} --index <INDEX> --req-body --resp-body --keys
+                 python3 /mnt/skill_library/api-recon-toolkit/scripts/burp.py view {{ capture }} --index <INDEX> --decode-auth
+            2. Compute the note filename stem:
+                 python3 /mnt/skill_library/api-recon-toolkit/scripts/vault_note.py slug "<METHOD> <PATH>"
+            3. Write the note body to {{ workspace }}/endpoints/<slug>.md using write_file, with EXACTLY this
+               frontmatter + sections (fill in the angle brackets):
+                 ---
+                 endpoint: <METHOD> <PATH>
+                 domain: <HOST>
+                 auth: <scheme, e.g. Bearer JWT (alg=HS256) | session cookie | query authorizeCode | none>
+                 oracle: <yes|no|unknown>
+                 source: capture #<INDEX>
+                 status: observed
+                 tags: [api-recon]
+                 ---
+                 # <METHOD> <PATH>
+                 ## Request shape
+                 ## Response shape
+                 ## Headers
+                 ## Auth
+                 ## Oracle
+                 <does it confirm the validity/existence of some data? one line + why>
+                 ## Observations
+            4. File the note into the vault:
+                 python3 /mnt/skill_library/api-recon-toolkit/scripts/vault_note.py put \
+                   --vault api-security-assessment --domain <HOST> --slug <slug> \
+                   --from {{ workspace }}/endpoints/<slug>.md --overwrite
+            5. Reply with ONE line: "<METHOD> <PATH> -> oracle=<yes|no|unknown>".
+
+          STEP D — summarize (you do this): after every sub-agent has reported, write
+          {{ outputs }}/recon-summary.md listing each domain, the number of endpoints documented, and the
+          most useful reusable identifiers, then call present_files on it. If STEP A found no API items,
+          say so plainly and still record whatever cookies/JWTs harvest found.
       - id: build_sdk
-        model: gemini-pro
+        model: gemini-3.5-flash
         thinking: medium
         prompt: |
-          You are building a small, well-documented Python SDK for the target APIs of a security
-          assessment. Your ONLY input this task is the targets file at: {{ targets }}
-          Tools live at /mnt/skill_library/api-recon-toolkit/scripts/ (run with python3 <abs path>).
-          Never dump the whole targets file — the CLI slices it for you.
+          You are the LEAD agent building a small, well-documented Python SDK for the target APIs of an
+          authorized security assessment. Your ONLY input this task is the targets file at: {{ targets }}
+          The toolkit is at /mnt/skill_library/api-recon-toolkit/scripts/ (run with python3 <abs path>).
 
-          STEP A — list the scope:
+          YOU ARE A COORDINATOR. Do NOT inspect individual targets yourself — writing every endpoint's
+          method in your own context risks the recursion limit. Authoring each endpoint's SDK function is
+          SUB-AGENT work (STEP B). Your job is: list, delegate, assemble.
+
+          STEP A — list the scope (you do this):
             python3 /mnt/skill_library/api-recon-toolkit/scripts/targets.py list {{ targets }} --format json
-          Note the domain and the endpoint indices.
+          Keep the domain and the list of endpoint indices.
 
-          STEP B — build the SDK in {{ workspace }}/sdk/ (shared, so later steps can import it). Do the
-          endpoints ONE AT A TIME to manage context. For each index N:
-            python3 .../targets.py show {{ targets }} --index N --part both
-          Create/extend {{ workspace }}/sdk/client.py: a documented httpx-based client, one method per
-          endpoint, with:
-            - a base_url derived from the targets domain and a configurable auth hook (Bearer/cookie
-              placeholder — DO NOT hardcode secrets),
-            - typed parameters inferred from the request pseudo-schema (mark #required vs #optional),
-            - a docstring per method quoting the observed request and response shapes,
-            - clear TODO comments where the schema was ambiguous.
-          Also write {{ workspace }}/sdk/README.md explaining install (httpx), auth wiring, and one
-          usage example per endpoint.
+          STEP B — DELEGATE one sub-agent PER target endpoint. For EACH index, call delegate_task with
+          subagent_type="bash" (REQUIRED — a general-purpose sub-agent has no shell and will fail). You may
+          issue several delegate_task calls together to run in parallel. Give each sub-agent this EXACT
+          prompt, substituting <INDEX>:
 
-          STEP C — finish: copy the SDK to {{ outputs }}/sdk/ (write_file/bash) and call present_files
-          on {{ outputs }}/sdk/client.py and {{ outputs }}/sdk/README.md.
+            You are authoring ONE Python SDK function for a target API. Do only this one.
+            Targets file: {{ targets }}. Toolkit: /mnt/skill_library/api-recon-toolkit/scripts/.
+            1. Read the endpoint's shapes:
+                 python3 /mnt/skill_library/api-recon-toolkit/scripts/targets.py show {{ targets }} --index <INDEX> --part both
+            2. Compute the module stem: python3 /mnt/skill_library/api-recon-toolkit/scripts/vault_note.py slug "<METHOD> <PATH>"
+            3. Write {{ workspace }}/sdk/endpoints/<slug>.py using write_file: a documented httpx-based
+               function for THIS endpoint — base_url derived from the targets domain, a configurable auth
+               hook (Bearer/cookie placeholder — DO NOT hardcode secrets), typed parameters inferred from
+               the request pseudo-schema (mark #required vs #optional), a docstring quoting the observed
+               request and response shapes, and TODO comments where the schema is ambiguous.
+            4. Reply with ONE line: "wrote sdk/endpoints/<slug>.py for <METHOD> <PATH>".
+
+          STEP C — assemble (you do this): list the modules the sub-agents wrote
+          (ls {{ workspace }}/sdk/endpoints/), then write {{ workspace }}/sdk/README.md (install httpx, how
+          to wire auth, one usage example per endpoint) and {{ workspace }}/sdk/__init__.py re-exporting
+          each endpoint module. Copy the sdk/ directory to {{ outputs }}/sdk/ and call present_files on
+          {{ outputs }}/sdk/README.md and {{ outputs }}/sdk/__init__.py.

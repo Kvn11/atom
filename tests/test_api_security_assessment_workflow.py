@@ -24,10 +24,9 @@ def test_workflow_loads_and_has_expected_shape():
     assert task_ids == {"capture_recon", "build_sdk"}
 
 
-def test_tasks_use_gemini_pro_never_gemini_3():
+def test_tasks_use_gemini_3_5_flash():
     for t in _load().steps[0].tasks:
-        assert t.model == "gemini-pro"
-        assert "gemini-3" not in (t.model or "")
+        assert t.model == "gemini-3.5-flash"
 
 
 def test_prompts_reference_the_shipped_toolkit_and_vault():
@@ -40,3 +39,13 @@ def test_prompts_reference_the_shipped_toolkit_and_vault():
     # recon files notes into the domain-split vault; sdk lands in the shared workspace
     assert "vault_note.py" in recon and "api-security-assessment" in recon
     assert "{{ workspace }}/sdk/" in sdk
+
+
+def test_leads_delegate_per_endpoint_to_bash_subagents():
+    # Both leads must COORDINATE, not inspect individual APIs (avoids recursion-limit blowups):
+    # they delegate per-endpoint work to bash sub-agents.
+    for t in _load().steps[0].tasks:
+        p = t.prompt
+        assert "delegate_task" in p
+        assert 'subagent_type="bash"' in p          # bash children get shell + the vault CLI
+        assert "COORDINATOR" in p and "Do NOT inspect" in p
