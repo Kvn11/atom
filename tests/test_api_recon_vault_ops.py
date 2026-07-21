@@ -8,6 +8,25 @@ sys.path.insert(0, str(SCRIPTS))
 import vault_note  # noqa: E402
 
 
+def test_put_if_missing_is_noop_on_existing(tmp_path):
+    root = str(tmp_path)
+    p1, a1 = vault_note.write_note(root, "d.com", "get_root", "endpoint", "ORIGINAL")
+    assert a1 == "wrote"
+    p2, a2 = vault_note.write_note(root, "d.com", "get_root", "endpoint", "REPLACED", if_missing=True)
+    assert a2 == "skipped" and p2.read_text() == "ORIGINAL"     # prior work preserved
+
+
+def test_put_cli_reports_noop(tmp_path):
+    root = str(tmp_path)
+    src = tmp_path / "body.md"; src.write_text("BODY", encoding="utf-8")
+    def put(*extra):
+        return subprocess.run([sys.executable, str(SCRIPTS / "vault_note.py"), "put",
+                               "--root", root, "--domain", "d.com", "--slug", "get_root",
+                               "--from", str(src), *extra], capture_output=True, text=True)
+    assert "OK: wrote" in put().stdout
+    assert "NOOP: note exists" in put("--if-missing").stdout
+
+
 def test_append_creates_then_appends(tmp_path):
     p1 = vault_note.append_section(str(tmp_path), "api.example.com", "get_root", "## Hypotheses\n- H1")
     assert p1 == tmp_path / "api.example.com" / "endpoints" / "get_root.md"
