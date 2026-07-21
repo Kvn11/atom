@@ -38,8 +38,8 @@ def test_append_creates_then_appends(tmp_path):
 
 
 def test_register_blocker_creates_and_dedupes(tmp_path):
-    p = vault_note.register_blocker(str(tmp_path), "api.example.com", "no-second-account",
-                                    "post_api_v1_users", description="need a 2nd test account")
+    p, _ = vault_note.register_blocker(str(tmp_path), "api.example.com", "no-second-account",
+                                       "post_api_v1_users", description="need a 2nd test account")
     assert p == tmp_path / "api.example.com" / "blockers" / "BLK-no-second-account.md"
     body = p.read_text()
     assert "id: BLK-no-second-account" in body and "status: open" in body
@@ -57,7 +57,7 @@ def test_register_blocker_creates_and_dedupes(tmp_path):
 
 def test_blocker_status_flip(tmp_path):
     vault_note.register_blocker(str(tmp_path), "d.com", "waf-403", "ep_a", description="WAF blocks probes")
-    p = vault_note.register_blocker(str(tmp_path), "d.com", "waf-403", "ep_b", status="removed")
+    p, _ = vault_note.register_blocker(str(tmp_path), "d.com", "waf-403", "ep_b", status="removed")
     assert "status: removed" in p.read_text()
 
 
@@ -75,3 +75,29 @@ def test_concurrent_blocker_registration_no_lost_update(tmp_path):
     assert a.wait() == 0 and b.wait() == 0
     body = (tmp_path / "d.com" / "blockers" / "BLK-rate-limited.md").read_text()
     assert "- [[ep_one]]" in body and "- [[ep_two]]" in body
+
+
+def test_blocker_action_created_updated_unchanged(tmp_path):
+    root = str(tmp_path)
+    _, a1 = vault_note.register_blocker(root, "d.com", "rl", "ep_a", description="rate limited")
+    assert a1 == "created"
+    _, a2 = vault_note.register_blocker(root, "d.com", "rl", "ep_b")
+    assert a2 == "updated"                               # new endpoint linked
+    _, a3 = vault_note.register_blocker(root, "d.com", "rl", "ep_a")
+    assert a3 == "unchanged"                             # already linked, no status change
+
+
+def test_blocker_cli_reports_noop(tmp_path):
+    root = str(tmp_path)
+    def blk(ep):
+        return subprocess.run([sys.executable, str(SCRIPTS / "vault_note.py"), "blocker",
+                               "--root", root, "--domain", "d.com", "--id", "rl", "--endpoint", ep],
+                              capture_output=True, text=True)
+    assert "OK: blocker created" in blk("ep_a").stdout
+    out = blk("ep_a").stdout
+    assert "NOOP:" in out and "already linked" in out
+
+
+def test_append_kind_recon_targets_recon_md(tmp_path):
+    p = vault_note.append_section(str(tmp_path), "d.com", "ignored", "## Recon — 2026-07-21\n- x", kind="recon")
+    assert p == tmp_path / "d.com" / "recon.md" and "## Recon" in p.read_text()
