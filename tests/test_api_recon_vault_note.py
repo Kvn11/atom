@@ -14,14 +14,15 @@ def test_slug_matches_endpoint_slug():
 
 def test_write_endpoint_note_creates_nested_path(tmp_path):
     body = "---\nendpoint: GET /\n---\n# GET /\nhello"
-    p = vault_note.write_note(str(tmp_path), "account.vesync.com", "get_root", "endpoint", body)
+    p, action = vault_note.write_note(str(tmp_path), "account.vesync.com", "get_root", "endpoint", body)
+    assert action == "wrote"
     assert p == tmp_path / "account.vesync.com" / "endpoints" / "get_root.md"
     assert p.read_text() == body
 
 
 def test_write_recon_note_goes_to_domain_root(tmp_path):
-    p = vault_note.write_note(str(tmp_path), "my.api.com", "ignored", "recon", "# recon")
-    assert p == tmp_path / "my.api.com" / "recon.md"
+    p, action = vault_note.write_note(str(tmp_path), "my.api.com", "ignored", "recon", "# recon")
+    assert action == "wrote" and p == tmp_path / "my.api.com" / "recon.md"
     assert p.read_text() == "# recon"
 
 

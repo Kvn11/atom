@@ -47,7 +47,8 @@ def resolve_root(vault: str, runner=None) -> str:
     raise SystemExit(f"could not resolve on-disk path for vault '{vault}'")
 
 
-def write_note(root: str, domain: str, slug: str, kind: str, body: str, overwrite: bool = True) -> Path:
+def write_note(root: str, domain: str, slug: str, kind: str, body: str,
+               overwrite: bool = True, if_missing: bool = False) -> tuple[Path, str]:
     domain = domain.strip().strip("/")
     if not domain:
         raise SystemExit("domain is required")
@@ -55,11 +56,14 @@ def write_note(root: str, domain: str, slug: str, kind: str, body: str, overwrit
         target = Path(root) / domain / "recon.md"
     else:
         target = Path(root) / domain / "endpoints" / f"{slug}.md"
-    if target.exists() and not overwrite:
-        raise SystemExit(f"refusing to overwrite existing note: {target} (pass --overwrite)")
+    if target.exists():
+        if if_missing:
+            return target, "skipped"            # no-op: caller reports NOOP, prior note preserved
+        if not overwrite:
+            raise SystemExit(f"refusing to overwrite existing note: {target} (pass --overwrite)")
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(body, encoding="utf-8")
-    return target
+    return target, "wrote"
 
 
 def _locked_rmw(path: Path, transform) -> Path:
@@ -83,9 +87,13 @@ def _locked_rmw(path: Path, transform) -> Path:
     return path
 
 
-def append_section(root: str, domain: str, slug: str, text: str) -> Path:
-    """Append a markdown section to an endpoint note (create-if-missing), without shell-mangling."""
-    target = Path(root) / domain.strip("/") / "endpoints" / f"{slug}.md"
+def append_section(root: str, domain: str, slug: str, text: str, kind: str = "endpoint") -> Path:
+    """Append a markdown section (create-if-missing, flock'd). kind='recon' -> <domain>/recon.md."""
+    domain = domain.strip("/")
+    if kind == "recon":
+        target = Path(root) / domain / "recon.md"
+    else:
+        target = Path(root) / domain / "endpoints" / f"{slug}.md"
 
     def _t(old: str) -> str:
         body = old.rstrip("\n")
@@ -96,24 +104,37 @@ def append_section(root: str, domain: str, slug: str, text: str) -> Path:
 
 
 def register_blocker(root: str, domain: str, blocker_id: str, endpoint_slug: str,
-                     description: str | None = None, status: str | None = None) -> Path:
-    """Create/update <domain>/blockers/BLK-<id>.md and append [[endpoint]] to its affected list (deduped)."""
+                     description: str | None = None, status: str | None = None) -> tuple[Path, str]:
+    """Create/update <domain>/blockers/BLK-<id>.md; append [[endpoint]] (deduped). Returns (path, action).
+
+    action is "created" (new file), "updated" (a link added or status flipped), or "unchanged"
+    (endpoint already linked, status not changed) — a pure no-op the caller surfaces as NOOP.
+    """
     path = Path(root) / domain.strip("/") / "blockers" / f"BLK-{blocker_id}.md"
     link = f"- [[{endpoint_slug}]]"
+    state = {"action": "unchanged"}
 
     def _t(old: str) -> str:
-        if not old.strip():
+        created = not old.strip()
+        if created:
             old = (f"---\nid: BLK-{blocker_id}\nstatus: {status or 'open'}\nkind: blocker\n---\n"
                    f"# BLK-{blocker_id}\n\n{description or '(no description)'}\n\n## Affected endpoints\n")
+        changed = created
         if status:  # flip status when a human/agent marks it removed
-            old = re.sub(r"(?m)^status:.*$", f"status: {status}", old, count=1)
+            new = re.sub(r"(?m)^status:.*$", f"status: {status}", old, count=1)
+            changed = changed or (new != old)
+            old = new
         if "## Affected endpoints" not in old:
             old = old.rstrip("\n") + "\n\n## Affected endpoints\n"
+            changed = True
         if link not in old:
             old = old.rstrip("\n") + "\n" + link + "\n"
+            changed = True
+        state["action"] = "created" if created else ("updated" if changed else "unchanged")
         return old
 
-    return _locked_rmw(path, _t)
+    _locked_rmw(path, _t)
+    return path, state["action"]
 
 
 def cmd_slug(args) -> int:
@@ -124,15 +145,19 @@ def cmd_slug(args) -> int:
 def cmd_append(args) -> int:
     root = args.root or resolve_root(args.vault)
     text = Path(args.from_file).read_text(encoding="utf-8")
-    print(f"appended -> {append_section(root, args.domain, args.slug, text)}")
+    p = append_section(root, args.domain, args.slug, text, kind=args.kind)
+    print(f"OK: appended -> {p}")
     return 0
 
 
 def cmd_blocker(args) -> int:
     root = args.root or resolve_root(args.vault)
     desc = Path(args.desc_from).read_text(encoding="utf-8") if args.desc_from else None
-    p = register_blocker(root, args.domain, args.id, args.endpoint, description=desc, status=args.status)
-    print(f"blocker -> {p}")
+    p, action = register_blocker(root, args.domain, args.id, args.endpoint, description=desc, status=args.status)
+    if action == "unchanged":
+        print(f"NOOP: [[{args.endpoint}]] already linked to BLK-{args.id}, no change -> {p}")
+    else:
+        print(f"OK: blocker {action} -> {p}")
     return 0
 
 
@@ -140,8 +165,9 @@ def cmd_put(args) -> int:
     root = args.root or resolve_root(args.vault)
     body = Path(args.from_file).read_text(encoding="utf-8")
     slug = args.slug or "note"
-    p = write_note(root, args.domain, slug, args.kind, body, overwrite=args.overwrite)
-    print(f"wrote {p}")
+    p, action = write_note(root, args.domain, slug, args.kind, body,
+                           overwrite=args.overwrite, if_missing=args.if_missing)
+    print(f"NOOP: note exists, skipped -> {p}" if action == "skipped" else f"OK: wrote -> {p}")
     return 0
 
 
@@ -157,11 +183,13 @@ def main() -> int:
     p.add_argument("--from", dest="from_file", required=True)
     p.add_argument("--kind", choices=["endpoint", "recon"], default="endpoint")
     p.add_argument("--overwrite", action="store_true")
+    p.add_argument("--if-missing", dest="if_missing", action="store_true")
     p.set_defaults(fn=cmd_put)
 
     p = sub.add_parser("append")
     g = p.add_mutually_exclusive_group(required=True); g.add_argument("--vault"); g.add_argument("--root")
-    p.add_argument("--domain", required=True); p.add_argument("--slug", required=True)
+    p.add_argument("--domain", required=True); p.add_argument("--slug", default="")
+    p.add_argument("--kind", choices=["endpoint", "recon"], default="endpoint")
     p.add_argument("--from", dest="from_file", required=True); p.set_defaults(fn=cmd_append)
 
     p = sub.add_parser("blocker")

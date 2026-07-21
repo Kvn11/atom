@@ -53,7 +53,7 @@ def test_leads_delegate_per_endpoint_to_bash_subagents():
 
 def test_has_hypothesize_and_test_steps():
     wf = _load()
-    assert [s.title for s in wf.steps] == ["Setup", "Hypothesize", "Test"]
+    assert [s.title for s in wf.steps] == ["Setup", "Hypothesize", "Test", "Confirm"]
     hyp = wf.steps[1].tasks
     tst = wf.steps[2].tasks
     assert [t.id for t in hyp] == ["hypothesize"]
@@ -61,8 +61,50 @@ def test_has_hypothesize_and_test_steps():
     assert hyp[0].model == "gemini-3.5-flash" and tst[0].model == "gemini-3.5-flash"
 
 
+def test_has_confirm_step():
+    wf = _load()
+    assert wf.steps[3].title == "Confirm"
+    conf = wf.steps[3].tasks
+    assert [t.id for t in conf] == ["confirm"]
+    assert conf[0].model == "gemini-3.5-flash"
+
+
+def test_confirm_prompt_reproduces_and_gates():
+    p = _task("confirm")
+    assert "COORDINATOR" in p and "delegate_task" in p and 'subagent_type="bash"' in p
+    assert "findings.py list" in p and "findings.py show" in p
+    assert "findings.py confirm" in p and "findings.py discard" in p
+    assert "confirmed-findings.jsonl" in p and "discarded-findings.jsonl" in p
+    assert "verbatim" in p.lower()                 # evidence commands run exactly as recorded
+    assert "0 findings" in p or "nothing to confirm" in p.lower()   # zero-finding graceful path
+    # the deliverable must exist even when EVERY finding is discarded (not just when zero were emitted)
+    assert "even if" in p.lower() and "discarded" in p.lower()
+    # the Confirm sub-agent has its OWN destructive gate (the lead can't see per-finding evidence)
+    assert "SAFETY GATE" in p and "not re-sent" in p.lower()
+
+
+def test_test_findings_evidence_mints_any_credential():
+    # evidence must never hardcode a live credential — cookies/headers are minted inline too
+    p = _task("test")
+    assert "--field cookie" in p
+
+
 def _task(name):
     return {t.id: t for s in _load().steps for t in s.tasks}[name].prompt
+
+
+def test_setup_and_hypothesize_are_rerun_safe():
+    tasks = {t.id: t for s in _load().steps for t in s.tasks}
+    recon = tasks["capture_recon"].prompt
+    hyp = tasks["hypothesize"].prompt
+    # endpoint notes are create-if-missing (never re-clobber a prior assessment's note)
+    assert "--if-missing" in recon and "--overwrite" not in recon
+    assert "--if-missing" in hyp
+    # recon.md accumulates a dated section instead of overwriting
+    assert "vault_note.py append" in recon and "--kind recon" in recon
+    assert "## Recon — {{ date }}" in recon
+    # appended endpoint sections are date-stamped so re-assessment stacks, not duplicates
+    assert "## Hypotheses — {{ date }}" in hyp
 
 
 def test_hypothesize_prompt_delegates_and_covers_privacy():
@@ -71,6 +113,15 @@ def test_hypothesize_prompt_delegates_and_covers_privacy():
     assert "## Hypotheses" in p
     assert "PII" in p and "privacy" in p.lower()
     assert "vault_note.py append" in p
+
+
+def test_test_step_emits_findings_jsonl():
+    p = _task("test")
+    assert "findings.py add" in p
+    assert "{{ workspace }}/findings.jsonl" in p
+    # emitted evidence is tokenless (mint inline), and the test-log heading is date-stamped
+    assert "## Test log — {{ date }}" in p
+    assert 'TOKEN=$(' in p and "--field authorization" in p
 
 
 def test_test_prompt_is_safe_by_default_with_antibot_and_blockers():

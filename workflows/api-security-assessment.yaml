@@ -41,12 +41,14 @@ steps:
           STEP B — harvest reusable values (you do this):
             python3 /mnt/skill_library/api-recon-toolkit/scripts/burp.py harvest {{ capture }} --format json
           Save the JSON to {{ workspace }}/recon/values.json (write_file). Then, for EACH domain, write a
-          recon note to {{ workspace }}/recon/<domain>.recon.md with sections: Base URLs, Reusable headers,
-          Cookies, Auth/JWT shapes (claims only — NEVER a raw token), Candidate identifiers (real IDs
-          reusable as required fields when testing targets), Oracles. File it:
-            python3 /mnt/skill_library/api-recon-toolkit/scripts/vault_note.py put \
+          recon section to {{ workspace }}/recon/<domain>.recon.md whose FIRST line is the heading
+          "## Recon — {{ date }}" followed by: Base URLs, Reusable headers, Cookies, Auth/JWT shapes
+          (claims only — NEVER a raw token), Candidate identifiers (real IDs reusable as required fields
+          when testing targets), Oracles. APPEND it — this domain may already have recon from a prior
+          assessment, and appending preserves it (a fresh run stacks under its own dated heading):
+            python3 /mnt/skill_library/api-recon-toolkit/scripts/vault_note.py append \
               --vault api-security-assessment --domain <domain> --kind recon \
-              --from {{ workspace }}/recon/<domain>.recon.md --overwrite
+              --from {{ workspace }}/recon/<domain>.recon.md
 
           STEP C — DELEGATE one sub-agent PER observed endpoint. For EACH item in the STEP A list, call
           the delegate_task tool. You MUST set subagent_type="bash" (a general-purpose sub-agent has no
@@ -82,11 +84,14 @@ steps:
                  ## Oracle
                  <does it confirm the validity/existence of some data? one line + why>
                  ## Observations
-            4. File the note into the vault:
+            4. File the note into the vault (create-if-missing — a prior assessment may already have
+               documented this endpoint; do NOT clobber its hypotheses/tests):
                  python3 /mnt/skill_library/api-recon-toolkit/scripts/vault_note.py put \
                    --vault api-security-assessment --domain <HOST> --slug <slug> \
-                   --from {{ workspace }}/endpoints/<slug>.md --overwrite
-            5. Reply with ONE line: "<METHOD> <PATH> -> oracle=<yes|no|unknown>".
+                   --from {{ workspace }}/endpoints/<slug>.md --if-missing
+               If it prints "NOOP: note exists" the endpoint was documented in a prior run — that is
+               fine; leave the existing note as-is and do not try to replace it.
+            5. Reply with ONE line: "<METHOD> <PATH> -> oracle=<yes|no|unknown> (new|prior-run)".
 
           STEP D — summarize (you do this): after every sub-agent has reported, write
           {{ outputs }}/recon-summary.md listing each domain, the number of endpoints documented, and the
@@ -168,14 +173,14 @@ steps:
                frontmatter (endpoint: <METHOD> <PATH> / domain: <HOST> / auth: unknown / oracle: unknown /
                status: target / tags: [api-recon]) plus "## Request shape" and "## Response shape" from
                step 1, then file it:
-                 python3 /mnt/skill_library/api-recon-toolkit/scripts/vault_note.py put --vault api-security-assessment --domain <HOST> --slug <slug> --from {{ workspace }}/hyp/<slug>.md --overwrite
+                 python3 /mnt/skill_library/api-recon-toolkit/scripts/vault_note.py put --vault api-security-assessment --domain <HOST> --slug <slug> --from {{ workspace }}/hyp/<slug>.md --if-missing
             3. Develop hypotheses from the endpoint shape + {{ workspace }}/recon/values.json (reusable IDs
                and other identities). Cover each category with one hypothesis where plausible (else write
                "N/A — reason"): IDOR/BOLA, mass-assignment, broken authn/authz, injection
                (SQLi/XSS/SSRF/path/command), and ALWAYS a PRIVACY hypothesis — "can an unauthorized user
                obtain another user's PII via this endpoint?".
             4. Write the hypotheses to {{ workspace }}/hyp/<slug>.hyp.md (write_file) as:
-                 ## Hypotheses
+                 ## Hypotheses — {{ date }}
                  ### H1 — <category> — <one-line theory>
                  - Probe: <concrete request: method, path, which identity, key params/body>
                  - Privacy? <yes/no>
@@ -244,20 +249,104 @@ steps:
                  that returns the victim's PII fields = CONFIRMED privacy leak. Record PII by FIELD
                  NAME/presence, never raw values.
             3. Write results to {{ workspace }}/test/<slug>.log.md (write_file):
-                 ## Test log
+                 ## Test log — {{ date }}
                  ### H1 — <confirmed | not-vulnerable | inconclusive | blocked>
                  - Attempt: <method path, identity used, UA>
                  - Result: <status + minimal evidence (PII as field names)>
                  - Blocker (if any): [[BLK-<slug>]] — <one line>
                Append it: python3 /mnt/skill_library/api-recon-toolkit/scripts/vault_note.py append --vault api-security-assessment --domain <HOST> --slug <slug> --from {{ workspace }}/test/<slug>.log.md
+            3b. For each hypothesis you CONFIRMED (a real, reproduced vulnerability — especially a
+                privacy/PII leak), emit a structured finding. Write {{ workspace }}/test/<slug>.<Hn>.finding.json
+                (write_file) as:
+                  {"title": "<one-line vuln title>",
+                   "description": "<what an unauthorized caller obtains and why it is a vuln — PII by field name, never raw values>",
+                   "evidence": ["<the EXACT tokenless one-liner that reproduced it: TOKEN=$(python3 /mnt/skill_library/api-recon-toolkit/scripts/burp.py cred {{ capture }} --index <IDENTITY_INDEX> --field authorization); curl -sS -X <METHOD> 'https://<HOST><path>' -H \"Authorization: $TOKEN\" -H 'User-Agent: <UA>' <other headers>>"]}
+                NEVER put a live credential in evidence — mint EVERY credential inline with $(...), not
+                just the bearer token. If the endpoint authenticates by cookie or another captured header
+                instead of (or in addition to) Authorization, mint THAT too and reference the variable:
+                  COOKIE=$(python3 /mnt/skill_library/api-recon-toolkit/scripts/burp.py cred {{ capture }} --index <IDENTITY_INDEX> --field cookie); curl ... -H "Cookie: $COOKIE"
+                (or --field header:<NAME> for any other auth header). No raw cookie/token/session value
+                may appear as a literal in evidence. Then append it:
+                  python3 /mnt/skill_library/api-recon-toolkit/scripts/findings.py add --from {{ workspace }}/test/<slug>.<Hn>.finding.json --to {{ workspace }}/findings.jsonl
+                (findings.py REJECTS a raw JWT — if it errors, or if any credential is a literal, fix the
+                evidence to mint it with $(...).)
             4. For every blocker you hit, register it (idempotent). Write a one-line description to
                {{ workspace }}/test/<slug>.blk.md, then:
                  python3 /mnt/skill_library/api-recon-toolkit/scripts/vault_note.py blocker --vault api-security-assessment --domain <HOST> --id <blocker-slug> --endpoint <slug> --desc-from {{ workspace }}/test/<slug>.blk.md
                Blocker slugs (prefer these): no-second-account, no-victim-id, auth-expired, waf-403,
                rate-limited, mfa-required, destructive-skipped, endpoint-unreachable, needs-write-scope.
-            5. Reply ONE line: "<METHOD> <PATH> -> confirmed=<n> blocked=<n>".
+            5. Reply ONE line: "<METHOD> <PATH> -> confirmed=<n> findings=<n> blocked=<n>".
 
           STEP C — report (you do this): after all sub-agents report, write {{ outputs }}/test-report.md —
-          confirmed findings by severity (call out privacy/PII leaks), plus a blocker table: for each
-          BLK-*.md under <HOST>/blockers/, its id, status, and the count of affected endpoints. Call
-          present_files on {{ outputs }}/test-report.md.
+          confirmed findings by severity (call out privacy/PII leaks), the count of findings emitted to
+          {{ workspace }}/findings.jsonl (python3 /mnt/skill_library/api-recon-toolkit/scripts/findings.py
+          list {{ workspace }}/findings.jsonl), plus a blocker table: for each BLK-*.md under
+          <HOST>/blockers/, its id, status, and the count of affected endpoints. Call present_files on
+          {{ outputs }}/test-report.md. The findings.jsonl feeds the next step (Confirm).
+  - title: Confirm
+    description: Independently reproduce each emitted finding from its curl evidence — confirmed findings are the deliverable; non-reproducible ones go to an audit log.
+    tasks:
+      - id: confirm
+        model: gemini-3.5-flash
+        thinking: high
+        prompt: |
+          You are the LEAD coordinating INDEPENDENT reproduction of the findings emitted by the Test
+          step of an authorized assessment of your org's own APIs. Raw findings:
+          {{ workspace }}/findings.jsonl. Capture (identities/tokens): {{ capture }}. Toolkit at
+          /mnt/skill_library/api-recon-toolkit/scripts/. Vault: api-security-assessment.
+
+          YOU ARE A COORDINATOR. Do NOT reproduce findings yourself — delegate each to a sub-agent.
+          Looping over findings in your own context will hit the recursion limit.
+
+          STEP A — list the findings (you do this):
+            python3 /mnt/skill_library/api-recon-toolkit/scripts/findings.py list {{ workspace }}/findings.jsonl --format json
+          If there are 0 findings, there is nothing to confirm: create an empty deliverable by writing
+          an empty file {{ outputs }}/confirmed-findings.jsonl (write_file with ""), write
+          {{ outputs }}/confirmation-summary.md saying "Test emitted 0 findings; nothing to confirm",
+          call present_files on both, and STOP (do not delegate).
+
+          Otherwise (>=1 finding): FIRST create an empty {{ outputs }}/confirmed-findings.jsonl now
+          (write_file with "") so the deliverable exists even if EVERY finding is later discarded — a
+          `findings.py confirm` only ever appends, so nothing creates this file when no finding is
+          confirmed. Then proceed to STEP B.
+
+          SAFETY: reproduction is live but SAFE-BY-DEFAULT. If a finding's evidence is destructive
+          /mutating, do NOT re-send it — discard it with reason "destructive — not re-sent".
+          ANTI-BOT: mint-once (reuse the captured token; re-mint only on a 401), corpus User-Agent,
+          throttle <=2 req/s. Copy these rules into every sub-agent prompt.
+
+          STEP B — call delegate_task to run one sub-agent PER finding index (subagent_type="bash",
+          REQUIRED — a general-purpose sub-agent has no shell and will fail). You may run several in
+          parallel (atom caps concurrency at 4). Give each this EXACT prompt, substituting <N> and the
+          ANTI-BOT rules text:
+
+            You are reproducing ONE security finding. Do only this one. Authorized, live, SAFE-BY-DEFAULT.
+            Raw findings: {{ workspace }}/findings.jsonl. Anti-bot rules: <RULES>.
+            1. Read the finding (title, description, evidence commands):
+                 python3 /mnt/skill_library/api-recon-toolkit/scripts/findings.py show {{ workspace }}/findings.jsonl --index <N>
+            1b. SAFETY GATE (safe-by-default) — inspect the evidence commands BEFORE running anything. If
+                ANY command is destructive or state-changing — an HTTP method other than GET/HEAD/OPTIONS
+                (POST/PUT/PATCH/DELETE), or a path/verb that mutates (create/update/delete/cancel/reset/
+                purchase/password/email) — do NOT run it. Discard the finding and STOP:
+                  python3 /mnt/skill_library/api-recon-toolkit/scripts/findings.py discard --from {{ workspace }}/findings.jsonl --index <N> --to {{ outputs }}/discarded-findings.jsonl --reason "destructive — not re-sent"
+                Then reply "F<N> -> discarded (destructive — not re-sent)" and do nothing else.
+            2. Otherwise run EACH evidence command VERBATIM, one per bash call (each is a self-contained
+               TOKEN=$(...); curl ... one-liner — the $TOKEN capture only works within a single call).
+               Do not edit the commands except to obey the anti-bot rules.
+            3. Decide: does the response REPRODUCE the vulnerability in `description`? For a privacy/IDOR
+               finding it reproduces ONLY if the attacker identity actually receives the victim's PII
+               fields (record PII by FIELD NAME/presence, never raw values). A 401/403/empty/not-found
+               result does NOT reproduce.
+            4a. Reproduced -> keep it:
+                 python3 /mnt/skill_library/api-recon-toolkit/scripts/findings.py confirm --from {{ workspace }}/findings.jsonl --index <N> --to {{ outputs }}/confirmed-findings.jsonl
+            4b. NOT reproduced -> discard it to the audit log. Write a ONE-LINE reason + a minimal output
+                snippet (status line + why; NO raw PII) to {{ workspace }}/confirm/<N>.out.txt, then:
+                 python3 /mnt/skill_library/api-recon-toolkit/scripts/findings.py discard --from {{ workspace }}/findings.jsonl --index <N> --to {{ outputs }}/discarded-findings.jsonl --reason "<why>" --output-from {{ workspace }}/confirm/<N>.out.txt
+            5. Reply ONE line: "F<N> -> confirmed" or "F<N> -> discarded (<why>)".
+
+          STEP C — assemble (you do this): after all sub-agents report,
+            python3 /mnt/skill_library/api-recon-toolkit/scripts/findings.py list {{ outputs }}/confirmed-findings.jsonl
+          Write {{ outputs }}/confirmation-summary.md: total emitted, how many confirmed, how many
+          discarded and their reasons. The file {{ outputs }}/confirmed-findings.jsonl is the FINAL
+          DELIVERABLE. Call present_files on {{ outputs }}/confirmed-findings.jsonl and
+          {{ outputs }}/confirmation-summary.md.

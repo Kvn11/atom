@@ -105,12 +105,23 @@ sub-agents** (`delegate_task`) rather than inspecting APIs itself — this keeps
 recursion limit. Notes are **split by domain at the vault root** (`<domain>/recon.md`,
 `<domain>/endpoints/<slug>.md`).
 
-Two further steps then run in the same pipeline: **Hypothesize** fans out per target API to write
-security + privacy (PII-for-unauthorized-user) hypotheses into each endpoint note first, and **Test**
-fans out per target API to live-test them **safe-by-default** (non-destructive only; destructive probes
-are documented, never sent) using the capture's in-scope identities. Blockers are their own notes
-(`<domain>/blockers/BLK-<slug>.md`) with an affected-endpoints list, so clearing a blocker maps to every
-endpoint it unblocked.
+Three further steps then run in the same pipeline: **Hypothesize** fans out per target API to write
+security + privacy (PII-for-unauthorized-user) hypotheses into each endpoint note first; **Test** fans
+out per target API to live-test them **safe-by-default** (non-destructive only; destructive probes are
+documented, never sent) using the capture's in-scope identities, and **emits each confirmed
+vulnerability as a structured finding** to `findings.jsonl` (title, description, and **tokenless** curl
+evidence — the token is minted inline at run-time, never stored); and **Confirm** fans out one
+sub-agent per finding to **independently reproduce it from its recorded evidence** — reproduced
+findings land in `confirmed-findings.jsonl` (**the final deliverable**), while non-reproducible ones go
+to `discarded-findings.jsonl` with a reason (an audit log, never silently dropped). Blockers are their
+own notes (`<domain>/blockers/BLK-<slug>.md`) with an affected-endpoints list, so clearing a blocker
+maps to every endpoint it unblocked.
+
+**Re-run safe.** Running again over a previously-assessed domain never clobbers prior work: endpoint
+notes are written create-if-missing (a re-observed endpoint keeps its earlier hypotheses/tests),
+`recon.md` accumulates a new dated section instead of overwriting, and appended sections are
+date-stamped. Every mutating toolkit command reports `OK:` (changed) vs `NOOP:` (nothing changed) so
+the agent is never misled by a skipped write.
 
 It ships with LLM-friendly CLI tooling (`skill_library/api-recon-toolkit/`) that **slices, never dumps**
 — so a weak model stays in-context over large captures and up-to-25-endpoint targets files. **Deploy two
