@@ -31,6 +31,16 @@ SAMPLE_JWT = _make_jwt({
     "jti": "deadbeefcafe",
 })
 
+# A second in-scope identity (different audience id) for cross-user/roster tests.
+SAMPLE_JWT_2 = _make_jwt({
+    "iss": "example.com",
+    "aud": "99902222",
+    "terminalId": "zzz999yyy888",
+    "exp": 1779676117243,
+    "iat": 1779675217243,
+    "jti": "feedfacecafe",
+})
+
 
 def _item(url, host, method, path, ext, status, mime, request_raw, response_raw) -> str:
     req_b64 = base64.b64encode(request_raw).decode()
@@ -102,6 +112,18 @@ def build_capture_xml() -> str:
         + "".join(items)
         + "</items>\n"
     )
+
+
+def build_capture_xml_multi() -> str:
+    """Base capture + one more API item authenticated as a SECOND identity (aud 99902222)."""
+    extra = _item(
+        "https://api.example.com/api/v1/orders", "api.example.com", "GET", "/api/v1/orders", "",
+        "200", "JSON",
+        b"GET /api/v1/orders HTTP/1.1\r\nHost: api.example.com\r\n"
+        b"Authorization: Bearer " + SAMPLE_JWT_2.encode() + b"\r\n\r\n",
+        b'HTTP/2 200 OK\r\nContent-Type: application/json\r\n\r\n{"orders":[]}',
+    )
+    return build_capture_xml().replace("</items>\n", extra + "</items>\n")
 
 
 def write_capture(dir_path) -> str:

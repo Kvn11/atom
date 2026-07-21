@@ -224,6 +224,88 @@ def cmd_harvest(args) -> int:
     return 0
 
 
+# ---------------------------------------------------------------- identities
+_ID_CLAIM_KEYS = ("sub", "uid", "user_id", "userId", "aud")
+
+
+def _identity_key(claims: dict):
+    for k in _ID_CLAIM_KEYS:
+        v = claims.get(k)
+        if v:
+            return str(v)
+    return None
+
+
+def identities(xml_path: str) -> list:
+    """Enumerate distinct in-scope identities from the capture (T3). Keyed by JWT subject/audience,
+    falling back to a session-cookie value. Redacted — claims + alg only, never the raw token."""
+    roster: dict = {}
+    for it in _burp.iter_items(xml_path):
+        if _burp.is_asset(it):
+            continue
+        req = it.request
+        toks = _burp.find_jwts(req.header("Authorization") or "") + _burp.find_jwts(it.url or "")
+        key = None
+        claims: dict = {}
+        alg = None
+        for tok in toks:
+            d = _burp.decode_jwt(tok)
+            if d and _identity_key(d["payload"]):
+                key, claims, alg = _identity_key(d["payload"]), d["payload"], d["alg"]
+                break
+        if key is None:
+            ck = req.cookies()
+            if not ck:
+                continue
+            key = "cookie:" + ck[0][1][:12]
+        ent = roster.setdefault(key, {
+            "label": f"id-{key}"[:48], "user_ids": [], "auth": {"alg": alg, "claims": claims},
+            "cookie_names": [], "source_indices": [], "user_agents": [],
+        })
+        for cid in [str(claims[k]) for k in _ID_CLAIM_KEYS if claims.get(k)]:
+            if cid not in ent["user_ids"]:
+                ent["user_ids"].append(cid)
+        for n, _v in req.cookies():
+            if n not in ent["cookie_names"]:
+                ent["cookie_names"].append(n)
+        if it.index not in ent["source_indices"]:
+            ent["source_indices"].append(it.index)
+        ua = req.header("User-Agent")
+        if ua and ua not in ent["user_agents"]:
+            ent["user_agents"].append(ua)
+        if claims and not ent["auth"]["claims"]:
+            ent["auth"] = {"alg": alg, "claims": claims}
+    return list(roster.values())
+
+
+def cmd_identities(args) -> int:
+    data = identities(args.xml)
+    if args.format == "json":
+        print(json.dumps(data, indent=2, ensure_ascii=False))
+    else:
+        print(f"# {len(data)} in-scope identity(ies)")
+        for e in data:
+            print(f"  {e['label']}: user_ids={e['user_ids']} alg={e['auth']['alg']} "
+                  f"cookies={e['cookie_names']} source_items={e['source_indices']}")
+    return 0
+
+
+def cmd_cred(args) -> int:
+    """Print the RAW credential value for one item — for `TOKEN=$(burp.py cred ...)` capture only."""
+    it = _find_item(args.xml, args.index)
+    field = args.field.lower()
+    if field == "authorization":
+        val = it.request.header("Authorization") or ""
+    elif field == "cookie":
+        val = it.request.header("Cookie") or ""
+    elif field.startswith("header:"):
+        val = it.request.header(args.field.split(":", 1)[1]) or ""
+    else:
+        raise SystemExit("--field must be authorization, cookie, or header:NAME")
+    print(val)
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -251,6 +333,14 @@ def main() -> int:
     p = sub.add_parser("harvest"); p.add_argument("xml")
     p.add_argument("--format", choices=["table", "json"], default="table")
     p.set_defaults(fn=cmd_harvest)
+
+    p = sub.add_parser("identities"); p.add_argument("xml")
+    p.add_argument("--format", choices=["table", "json"], default="table")
+    p.set_defaults(fn=cmd_identities)
+
+    p = sub.add_parser("cred"); p.add_argument("xml"); p.add_argument("--index", type=int, required=True)
+    p.add_argument("--field", default="authorization")
+    p.set_defaults(fn=cmd_cred)
 
     args = ap.parse_args()
     return args.fn(args)
