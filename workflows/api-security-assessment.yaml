@@ -249,20 +249,31 @@ steps:
                  that returns the victim's PII fields = CONFIRMED privacy leak. Record PII by FIELD
                  NAME/presence, never raw values.
             3. Write results to {{ workspace }}/test/<slug>.log.md (write_file):
-                 ## Test log
+                 ## Test log — {{ date }}
                  ### H1 — <confirmed | not-vulnerable | inconclusive | blocked>
                  - Attempt: <method path, identity used, UA>
                  - Result: <status + minimal evidence (PII as field names)>
                  - Blocker (if any): [[BLK-<slug>]] — <one line>
                Append it: python3 /mnt/skill_library/api-recon-toolkit/scripts/vault_note.py append --vault api-security-assessment --domain <HOST> --slug <slug> --from {{ workspace }}/test/<slug>.log.md
+            3b. For each hypothesis you CONFIRMED (a real, reproduced vulnerability — especially a
+                privacy/PII leak), emit a structured finding. Write {{ workspace }}/test/<slug>.<Hn>.finding.json
+                (write_file) as:
+                  {"title": "<one-line vuln title>",
+                   "description": "<what an unauthorized caller obtains and why it is a vuln — PII by field name, never raw values>",
+                   "evidence": ["<the EXACT tokenless one-liner that reproduced it: TOKEN=$(python3 /mnt/skill_library/api-recon-toolkit/scripts/burp.py cred {{ capture }} --index <IDENTITY_INDEX> --field authorization); curl -sS -X <METHOD> 'https://<HOST><path>' -H \"Authorization: $TOKEN\" -H 'User-Agent: <UA>' <other headers>>"]}
+                NEVER put a raw token in evidence — mint it inline with $(...). Then append it:
+                  python3 /mnt/skill_library/api-recon-toolkit/scripts/findings.py add --from {{ workspace }}/test/<slug>.<Hn>.finding.json --to {{ workspace }}/findings.jsonl
+                (findings.py REJECTS a raw JWT — if it errors, fix the evidence to use $(...).)
             4. For every blocker you hit, register it (idempotent). Write a one-line description to
                {{ workspace }}/test/<slug>.blk.md, then:
                  python3 /mnt/skill_library/api-recon-toolkit/scripts/vault_note.py blocker --vault api-security-assessment --domain <HOST> --id <blocker-slug> --endpoint <slug> --desc-from {{ workspace }}/test/<slug>.blk.md
                Blocker slugs (prefer these): no-second-account, no-victim-id, auth-expired, waf-403,
                rate-limited, mfa-required, destructive-skipped, endpoint-unreachable, needs-write-scope.
-            5. Reply ONE line: "<METHOD> <PATH> -> confirmed=<n> blocked=<n>".
+            5. Reply ONE line: "<METHOD> <PATH> -> confirmed=<n> findings=<n> blocked=<n>".
 
           STEP C — report (you do this): after all sub-agents report, write {{ outputs }}/test-report.md —
-          confirmed findings by severity (call out privacy/PII leaks), plus a blocker table: for each
-          BLK-*.md under <HOST>/blockers/, its id, status, and the count of affected endpoints. Call
-          present_files on {{ outputs }}/test-report.md.
+          confirmed findings by severity (call out privacy/PII leaks), the count of findings emitted to
+          {{ workspace }}/findings.jsonl (python3 /mnt/skill_library/api-recon-toolkit/scripts/findings.py
+          list {{ workspace }}/findings.jsonl), plus a blocker table: for each BLK-*.md under
+          <HOST>/blockers/, its id, status, and the count of affected endpoints. Call present_files on
+          {{ outputs }}/test-report.md. The findings.jsonl feeds the next step (Confirm).

@@ -87,6 +87,15 @@ def test_hypothesize_prompt_delegates_and_covers_privacy():
     assert "vault_note.py append" in p
 
 
+def test_test_step_emits_findings_jsonl():
+    p = _task("test")
+    assert "findings.py add" in p
+    assert "{{ workspace }}/findings.jsonl" in p
+    # emitted evidence is tokenless (mint inline), and the test-log heading is date-stamped
+    assert "## Test log — {{ date }}" in p
+    assert 'TOKEN=$(' in p and "--field authorization" in p
+
+
 def test_test_prompt_is_safe_by_default_with_antibot_and_blockers():
     p = _task("test")
     assert "COORDINATOR" in p and "delegate_task" in p and 'subagent_type="bash"' in p
