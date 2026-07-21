@@ -1,8 +1,10 @@
 # API security & privacy assessment workflow — design (Step 1: Setup)
 
 - **Date:** 2026-07-21
-- **Status:** Brainstorm design — **pending user review** (four default decisions flagged below need confirm/override)
-- **Scope:** A production atom workflow that performs an authorized security & privacy assessment of a customer's *own* API targets, driven by a **weak reasoning model (Gemini 2.5 Pro)**. This spec fully specifies **Step 1 (Setup)** and the **shipped CLI tooling** it depends on; later steps (deep per-endpoint threat analysis, live testing, reporting) are sketched as roadmap only. The workflow ships in-repo (`workflows/` + `skill_library/`) and is pushed to the remote; the user copies it into `$HOME/.atom/` themselves.
+- **Status:** Approved + implemented (merged to `main`). See §12 for the post-merge revision.
+- **Scope:** A production atom workflow that performs an authorized security & privacy assessment of a customer's *own* API targets, driven by a **weak reasoning model**. This spec fully specifies **Step 1 (Setup)** and the **shipped CLI tooling** it depends on; later steps (deep per-endpoint threat analysis, live testing, reporting) are sketched as roadmap only. The workflow ships in-repo (`workflows/` + `skill_library/`) and is pushed to the remote; the user copies it into `$HOME/.atom/` themselves.
+
+> **Revision 2026-07-21b (see §12):** the model is now **Gemini 3.5 Flash** (`gemini-3.5-flash`, reasoning via `thinking_level`), and **D3 flipped to sub-agent fan-out** — the lead coordinates and delegates per-endpoint work to **bash sub-agents** rather than looping itself. Read §12 alongside the original text below, which it supersedes on those two points.
 
 ---
 
@@ -247,6 +249,32 @@ Prompts are the primary control surface for the weak model: exact command templa
   sensitive real captures), so the unit tests build a tiny synthetic Burp capture + targets file
   in-process (`tests/_secassess_fixtures.py`) rather than depending on `examples/`. The tooling was
   additionally smoke-verified against the real `examples/account.vesync.com.xml` locally.
+
+## 12. Revision 2026-07-21b — model swap + sub-agent fan-out
+
+Two changes landed after the initial merge, both driven by user direction:
+
+**(a) Model → Gemini 3.5 Flash.** Gemini 3.5 Flash (`gemini-3.5-flash`, released 2026-05-19) is now
+authorized for security work and is reasoning-capable, so it replaces `gemini-pro` (2.5-pro) on both
+tasks. It was added to `atom.models.registry` (1M window, reasoning). **API nuance:** Gemini 3+
+replaced the integer `thinking_budget` with a `thinking_level` enum (`minimal/low/medium/high`);
+`thinking_budget` is deprecated for those models. `_thinking_overrides` now emits `thinking_level` for
+Gemini 3+ (`thinking: high` → `{"thinking_level": "high"}`) while 2.5 models keep `thinking_budget`.
+Verified against `langchain-google-genai==4.2.6` (both params exist; `thinking_level` wins on 3+).
+
+**(b) D3 flipped to sub-agent fan-out.** The lead must NOT inspect individual endpoints itself — a
+sequential loop over up-to-25 endpoints (each with several `view` calls and large outputs) exceeds the
+lead's ~400-super-step recursion limit. Instead each lead is now a **coordinator**: it maps/harvests
+(recon) or lists (SDK), then **delegates one `bash` sub-agent per endpoint** via `delegate_task`, and
+finally summarizes/assembles. Key mechanics that make this correct (verified in `atom.subagent`):
+sub-agents inherit the **task's exact model instance** (so they also run on Gemini 3.5 Flash), they
+**share the parent's cached sandbox** (same run workspace/uploads, and `/mnt/skill_library` is mounted),
+and **only `subagent_type="bash"` children get a shell AND the notes-vault instruction** — so the
+delegation prompts require `subagent_type="bash"`. Each child handles exactly one endpoint (well under
+its own 300-super-step limit), and the lead issues ~N short `delegate_task` calls instead of ~6N
+inspection calls, keeping it far under its limit. Recon sub-agents write+file the endpoint note; SDK
+sub-agents each write one `sdk/endpoints/<slug>.py` module (distinct files → no write races), and the
+lead assembles the README + `__init__`.
 
 ## 11. Out of scope now (roadmap for later steps)
 

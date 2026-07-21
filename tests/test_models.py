@@ -37,6 +37,26 @@ def test_off_disables_each_provider():
     assert _thinking_overrides(resolve_spec("qwen-max"), "off") == {"enable_thinking": False}
 
 
+def test_gemini_3_uses_thinking_level_not_budget():
+    spec = resolve_spec("gemini-3.5-flash")
+    assert spec.provider == "google_genai"
+    assert spec.model_name == "gemini-3.5-flash"
+    assert spec.supports_reasoning is True
+    assert spec.context_window == 1_000_000
+    # Gemini 3+ takes the thinking_level enum, NOT the deprecated integer thinking_budget.
+    assert _thinking_overrides(spec, "high") == {"thinking_level": "high"}
+    assert _thinking_overrides(spec, "medium") == {"thinking_level": "medium"}
+    assert _thinking_overrides(spec, "off") == {"thinking_level": "minimal"}  # 3+ floors, can't disable
+    assert _thinking_overrides(spec, 24576) == {"thinking_level": "high"}      # int budget -> nearest level
+    assert "thinking_budget" not in _thinking_overrides(spec, "high")
+
+
+def test_gemini_25_still_uses_thinking_budget():
+    # Regression: the 2.5 models keep the integer-budget path unchanged.
+    assert _thinking_overrides(resolve_spec("gemini-pro"), "high") == {"thinking_budget": 24576}
+    assert _thinking_overrides(resolve_spec("gemini-flash"), "off") == {"thinking_budget": 0}
+
+
 def test_clamp_concurrency_enforces_2_to_4():
     assert clamp_concurrency(1) == 2   # floor
     assert clamp_concurrency(3) == 3   # in band
