@@ -236,6 +236,18 @@ Prompts are the primary control surface for the weak model: exact command templa
 
 ---
 
+## 10a. Refinements made during implementation
+
+- **Token redaction at display sinks.** `burp.py` redacts JWT-shaped substrings (keeping a 12-char
+  header prefix + `…<JWT redacted>`) in every output path — URLs, request-line, header/cookie values,
+  and body text — so a raw bearer/authorizeCode token never leaks into the notes a weak model writes.
+  Extraction (`decode-auth`, `harvest`) still runs on the raw data, so claims (`aud`, `exp`, …) and
+  identifiers are fully available; only the raw token string is withheld.
+- **Committed, self-contained test fixtures.** `examples/` is gitignored (local-only, possibly
+  sensitive real captures), so the unit tests build a tiny synthetic Burp capture + targets file
+  in-process (`tests/_secassess_fixtures.py`) rather than depending on `examples/`. The tooling was
+  additionally smoke-verified against the real `examples/account.vesync.com.xml` locally.
+
 ## 11. Out of scope now (roadmap for later steps)
 
 Step 1 only. Sketched for continuity (each is its own future spec):
