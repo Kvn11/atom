@@ -283,8 +283,10 @@ export function RunView({ runId, onBack, onOpenRun }:
                     className={`rail-task${sel?.task === t.id && sel?.step === s.index ? " on" : ""}`}
                     onClick={() => { setSel({ step: s.index, task: t.id }); setTab("transcript"); }}>
                     <Dot status={t.status} />
-                    <span className="rail-task-id">{t.id}</span>
-                    {t.model && <span className="tag">{t.model}</span>}
+                    <span className="rail-task-main">
+                      <span className="rail-task-id">{t.id}</span>
+                      {t.model && <span className="tag rail-task-model">{t.model}</span>}
+                    </span>
                   </button>
                 ))}
               </div>

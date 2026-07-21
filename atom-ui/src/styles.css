@@ -140,11 +140,14 @@ table.runs tbody tr:last-child td { border-bottom: 0; }
 .rail-step { margin-bottom: 16px; }
 .rail-step-head { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 13px; margin-bottom: 8px; }
 .step-idx { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--ink-3); }
-.rail-task { display: flex; align-items: center; gap: 9px; width: 100%; text-align: left; border: 0; background: transparent; padding: 7px 9px; border-radius: var(--radius-sm); color: var(--ink); }
+.rail-task { display: flex; align-items: flex-start; gap: 9px; width: 100%; text-align: left; border: 0; background: transparent; padding: 7px 9px; border-radius: var(--radius-sm); color: var(--ink); }
 .rail-task:hover { background: var(--surface-2); }
 .rail-task.on { background: var(--accent-weak); }
-.rail-task-id { flex: 1; font-weight: 540; overflow-wrap: anywhere; }
+.rail-task .dot { margin-top: 5px; }
+.rail-task-main { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; flex: 1; min-width: 0; }
+.rail-task-id { font-weight: 540; overflow-wrap: anywhere; }
 .tag { font-family: var(--mono); font-size: 11px; color: var(--ink-2); background: var(--surface-3); padding: 1px 6px; border-radius: 5px; }
+.rail-task-model { font-size: 10px; align-self: flex-start; max-width: 100%; overflow-wrap: anywhere; }
 .rail-deliverables { border-top: 1px solid var(--border); padding-top: 12px; }
 .rail-h { font-size: 11.5px; text-transform: uppercase; letter-spacing: .04em; color: var(--ink-3); font-weight: 600; margin-bottom: 8px; }
 .rail-empty { color: var(--ink-3); font-size: 13px; padding: 4px 9px; }
