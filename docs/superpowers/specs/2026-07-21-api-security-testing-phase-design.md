@@ -28,7 +28,7 @@ Asked during brainstorming; the user was away, so the spec adopts the **recommen
 |---|---|---|---|
 | T1 | **Test posture / safety** | **Live, safe-by-default**: execute non-destructive probes live (reads + non-mutating requests) under the anti-bot rules (§6); for state-changing/destructive hypotheses (DELETE, account/data mutation, password/email change), document the exact probe but **do not send it** — mark `destructive-skipped` + `[[BLK-destructive-skipped]]` and flag for a human. | Live-execute-everything (disposable test env); dry-run-only (never send). |
 | T2 | **Structure** | **Extend `api-security-assessment.yaml`** with Step 2 + Step 3, so a run does setup→hypothesize→test in one pipeline sharing the workspace (SDK + recon available); vault persists across runs. | Separate `api-security-testing.yaml` (reads vault; SDK not in its workspace). |
-| T3 | **Identities for cross-user/PII tests** | **Capture-derived + blocker**: use victim IDs / second-identity material already in the recon values; when a genuine second authenticated identity is required but absent, record a `no-second-account` blocker. No new inputs. | Add optional second-identity workflow inputs. |
+| T3 | **Identities for cross-user/PII tests** | **Capture is authoritative (confirmed by user)**: the Burp capture contains **all in-scope identities and test accounts**. The agent enumerates that roster of identities (their tokens/cookies + user/account IDs) and uses them directly — attacker = one captured identity, victim = another's ID. A `no-second-account`/`no-victim-id` blocker is recorded only when the capture genuinely lacks an identity a test needs. No new inputs. | (Superseded) add second-identity inputs. |
 
 ---
 
@@ -38,7 +38,7 @@ Both steps reuse Step 1's proven pattern: the task **lead is a coordinator** tha
 
 ```
 Step 2 — Hypothesize (lead coordinates)          Step 3 — Test (lead coordinates)
-  targets.py list --format json                    read recon values -> mint-once token, corpus UA, header set
+  targets.py list --format json                    burp.py identities -> roster of in-scope accounts; corpus UA/headers
   delegate 1 bash sub-agent / target:              delegate 1 bash sub-agent / target:
     - ensure endpoint note exists                    - read note's ## Hypotheses
     - append ## Hypotheses (security + privacy)      - test each (SDK/curl + captured creds), safe-by-default
@@ -103,13 +103,18 @@ Two new subcommands (reuse `resolve_root`/`compute_slug`; keep stdlib-only). Bot
 
 The actual HTTP requests use the Step-1 **SDK** (imported from `{{ workspace }}/sdk/`) or `curl`; no new request tool is shipped (curl/SDK + captured creds cover it, and a wrapper would just re-implement curl).
 
+**One capture-tool addition — `burp.py identities`.** Because the capture is the authoritative roster of in-scope identities (T3), add a subcommand that enumerates the **distinct identities** present, so the weak model gets them deterministically rather than inferring:
+
+`python3 .../burp.py identities <capture.xml> [--format json]` → a list of identities, each grouping the auth material seen for one principal: an identity label, the user/account id (from JWT `sub`/`aud`/`uid` claims and recurring path/query IDs), the auth token **shape** (alg + claims, redacted — never the raw token), the session cookie name(s), and the User-Agent/header profile seen with it. Identities are keyed by decoded JWT subject/audience (falling back to session-cookie value) so two requests from the same account collapse to one identity. This is what the Step-3 lead uses to build attacker/victim pairs and to apply mint-once **per identity**.
+
 ---
 
 ## 6. Testing procedure & anti-bot rules (baked into the Step-3 prompts)
 
 A weak model doing live testing must not burn the test account (there is a documented 2026-05-08 lockout). The lead enforces **mint-once**, and every sub-agent prompt carries these rules verbatim:
 
-1. **Mint-once token.** The lead reads the recon values and passes the working auth token/cookie to every sub-agent; sub-agents reuse it and re-mint **only** on a 401, never pre-emptively.
+0. **Identity roster.** The lead first runs `burp.py identities {{ capture }}` to enumerate every in-scope identity/test account (T3). It passes the relevant identities (their tokens/cookies + user IDs) to each sub-agent; cross-user/privacy tests use two of them (attacker + victim). A missing needed identity → `[[BLK-no-second-account]]` / `[[BLK-no-victim-id]]`, not a fabricated account.
+1. **Mint-once per identity.** Sub-agents reuse each captured token as-is and re-mint **only** on a 401, never pre-emptively (N agents re-calling the auth endpoint is itself an abuse signal).
 2. **Corpus User-Agent.** Use the UA captured in recon (mobile/webview), never `curl/*` or `python-*`.
 3. **Full client header set.** Match the captured request (`Accept-Encoding/Language`, `Origin`, `Referer`, `Sec-Fetch-*`, `X-Requested-With`).
 4. **Throttle + jitter.** ≤2 RPS per endpoint, ≤5 aggregate; 50–200 ms randomized inter-request delay.
@@ -127,12 +132,13 @@ Combined with T1 (safe-by-default), destructive hypotheses are documented but ne
 Appended to `workflows/api-security-assessment.yaml` (both `model: gemini-3.5-flash`, `thinking: high`). Full prompt text is authored in the implementation plan; the shape:
 
 - **Step 2 "Hypothesize"** — task `hypothesize` (lead): `targets.py list`; delegate one bash sub-agent per target with an exact prompt that (a) computes the slug, (b) ensures the endpoint note exists (read existing recon note, else stub from `targets.py show` via `put`), (c) develops security + privacy hypotheses using the note + recon values, (d) writes them to `{{ workspace }}/hyp/<slug>.md` and files them with `vault_note.py append`, (e) reports a one-liner. Lead summarizes counts.
-- **Step 3 "Test"** — task `test` (lead): read `{{ workspace }}/recon/values.json` to fix the mint-once token + corpus UA + header set; delegate one bash sub-agent per target with an exact prompt embedding the anti-bot rules, the safe-by-default posture, the SDK path, and the shared creds — the sub-agent reads its note's hypotheses, tests each (safe-by-default), appends a `## Test log`, and registers blockers via `vault_note.py blocker`. Lead writes `{{ outputs }}/test-report.md` (findings by severity + a blocker table with affected-endpoint counts) and calls `present_files`.
+- **Step 3 "Test"** — task `test` (lead): run `burp.py identities {{ capture }}` to build the roster of in-scope identities/test accounts (+ read `{{ workspace }}/recon/values.json` for the corpus UA + header set); delegate one bash sub-agent per target with an exact prompt embedding the anti-bot rules, the safe-by-default posture, the SDK path, and the relevant captured identities (attacker + victim for cross-user/privacy tests) — the sub-agent reads its note's hypotheses, tests each (safe-by-default), appends a `## Test log`, and registers blockers via `vault_note.py blocker`. Lead writes `{{ outputs }}/test-report.md` (findings by severity + a blocker table with affected-endpoint counts) and calls `present_files`.
 
 ---
 
 ## 8. Testing strategy
 
+- **Unit test for `burp.py identities`** on the synthetic fixture capture: it returns the distinct identities keyed by JWT subject/audience (the fixture's `aud=55501234` collapses to one identity), each carrying its user id + token shape (redacted, no raw token) + cookie names — and a second injected identity in an extended fixture yields two distinct entries.
 - **Unit tests (pytest)** for the new helpers, using a temp "vault root":
   - `append` creates a missing note and appends a section to an existing one; content is byte-exact; concurrent appends to the same note don't lose data (spawn two processes under `flock`).
   - `register_blocker` creates `blockers/BLK-<slug>.md` with frontmatter; appends `[[endpoint]]` once (idempotent on repeat); `--status removed` flips frontmatter; two concurrent registrations of the same blocker both land (flock serializes, no lost update).
