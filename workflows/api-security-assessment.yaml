@@ -130,3 +130,134 @@ steps:
           to wire auth, one usage example per endpoint) and {{ workspace }}/sdk/__init__.py re-exporting
           each endpoint module. Copy the sdk/ directory to {{ outputs }}/sdk/ and call present_files on
           {{ outputs }}/sdk/README.md and {{ outputs }}/sdk/__init__.py.
+  - title: Hypothesize
+    description: Fan out per target API — develop security + privacy hypotheses and write them to each endpoint note FIRST.
+    tasks:
+      - id: hypothesize
+        model: gemini-3.5-flash
+        thinking: high
+        prompt: |
+          You are the LEAD coordinating security + privacy HYPOTHESIS development for an authorized
+          assessment of your org's own API targets. Input: targets file {{ targets }}. Reusable context:
+          the capture {{ capture }} and {{ workspace }}/recon/values.json. Toolkit at
+          /mnt/skill_library/api-recon-toolkit/scripts/. Vault: api-security-assessment (notes split by
+          DOMAIN at the root: <domain>/endpoints/<slug>.md).
+
+          YOU ARE A COORDINATOR. Do NOT analyze endpoints yourself — that is SUB-AGENT work and looping
+          over many endpoints will hit the recursion limit. Your job: list, delegate, summarize.
+
+          STEP A — list the targets (you do this):
+            python3 /mnt/skill_library/api-recon-toolkit/scripts/targets.py list {{ targets }} --format json
+          Keep the domain (call it <HOST>) and the endpoint indices.
+
+          STEP B — DELEGATE one sub-agent PER target endpoint. For EACH index, call delegate_task with
+          subagent_type="bash" (REQUIRED — a general-purpose sub-agent has no shell and will fail). You
+          may issue several together to run in parallel. Give each sub-agent this EXACT prompt,
+          substituting <INDEX> and <HOST>:
+
+            You are developing security + privacy hypotheses for ONE target API endpoint. Do only this one.
+            Targets: {{ targets }}. Reusable values: {{ workspace }}/recon/values.json.
+            Toolkit: /mnt/skill_library/api-recon-toolkit/scripts/. Vault: api-security-assessment. Domain: <HOST>.
+            1. Read the endpoint shape and compute its note stem:
+                 python3 /mnt/skill_library/api-recon-toolkit/scripts/targets.py show {{ targets }} --index <INDEX> --part both
+               Take <METHOD> and <PATH> from that output, then:
+                 python3 /mnt/skill_library/api-recon-toolkit/scripts/vault_note.py slug "<METHOD> <PATH>"
+            2. Ensure the endpoint note exists. Try to read it:
+                 obsidian vault=api-security-assessment read file="<HOST>/endpoints/<slug>.md"
+               If it does NOT exist, create a stub: write {{ workspace }}/hyp/<slug>.md (write_file) with
+               frontmatter (endpoint: <METHOD> <PATH> / domain: <HOST> / auth: unknown / oracle: unknown /
+               status: target / tags: [api-recon]) plus "## Request shape" and "## Response shape" from
+               step 1, then file it:
+                 python3 /mnt/skill_library/api-recon-toolkit/scripts/vault_note.py put --vault api-security-assessment --domain <HOST> --slug <slug> --from {{ workspace }}/hyp/<slug>.md --overwrite
+            3. Develop hypotheses from the endpoint shape + {{ workspace }}/recon/values.json (reusable IDs
+               and other identities). Cover each category with one hypothesis where plausible (else write
+               "N/A — reason"): IDOR/BOLA, mass-assignment, broken authn/authz, injection
+               (SQLi/XSS/SSRF/path/command), and ALWAYS a PRIVACY hypothesis — "can an unauthorized user
+               obtain another user's PII via this endpoint?".
+            4. Write the hypotheses to {{ workspace }}/hyp/<slug>.hyp.md (write_file) as:
+                 ## Hypotheses
+                 ### H1 — <category> — <one-line theory>
+                 - Probe: <concrete request: method, path, which identity, key params/body>
+                 - Privacy? <yes/no>
+                 ### H2 — ...
+               Then append it to the note (preserves prior sections):
+                 python3 /mnt/skill_library/api-recon-toolkit/scripts/vault_note.py append --vault api-security-assessment --domain <HOST> --slug <slug> --from {{ workspace }}/hyp/<slug>.hyp.md
+            5. Reply ONE line: "<METHOD> <PATH> -> <N> hypotheses (privacy: yes/no)".
+
+          STEP C — summarize (you do this): after all sub-agents report, write
+          {{ outputs }}/hypotheses-summary.md (endpoints theorized, total hypotheses, how many flag
+          privacy) and call present_files on it.
+  - title: Test
+    description: Fan out per target API — live-test the hypotheses (safe-by-default), documenting attempts, results, and ID-linked blockers.
+    tasks:
+      - id: test
+        model: gemini-3.5-flash
+        thinking: high
+        prompt: |
+          You are the LEAD coordinating AUTHORIZED live testing of your org's own API targets.
+          Targets: {{ targets }}. Capture: {{ capture }}. SDK: {{ workspace }}/sdk/. Reusable values:
+          {{ workspace }}/recon/values.json. Toolkit at /mnt/skill_library/api-recon-toolkit/scripts/.
+          Vault: api-security-assessment.
+
+          YOU ARE A COORDINATOR. Do NOT test endpoints yourself — delegate each to a sub-agent.
+
+          SAFETY (safe-by-default): only NON-DESTRUCTIVE probes may be sent (reads / non-mutating). For
+          any state-changing/destructive hypothesis (DELETE, account/data mutation, password/email
+          change), DOCUMENT the exact probe but DO NOT SEND it — mark it destructive-skipped.
+
+          STEP A — build the identity roster (you do this): the capture holds all in-scope identities/test
+          accounts. Enumerate them:
+            python3 /mnt/skill_library/api-recon-toolkit/scripts/burp.py identities {{ capture }} --format json
+          Note each identity's user id, source item index, cookie names, and user-agent; and the corpus
+          User-Agent/header style from {{ workspace }}/recon/values.json. You will pass the relevant
+          identities to each sub-agent (an ATTACKER identity + a VICTIM user id for cross-user/privacy tests).
+
+          ANTI-BOT RULES — copy these into EVERY sub-agent prompt: mint-once (reuse a captured token;
+          re-mint only on a 401, never pre-emptively); use a corpus User-Agent, never curl/python
+          defaults; send the full captured header set; throttle to <=2 req/s per endpoint with 50-200ms
+          jitter; use captured identifiers, never enumerate id spaces; on a 403/500/"inactive"/"No active
+          account" lockout signal, STOP and record a blocker.
+
+          STEP B — call delegate_task to run one sub-agent PER target endpoint (subagent_type="bash",
+          REQUIRED). You may run several in parallel (atom caps concurrency at 4). Give each this EXACT
+          prompt, substituting
+          <INDEX>/<HOST>, the ATTACKER identity's source item index (<IDENTITY_INDEX>), a VICTIM user id,
+          the corpus User-Agent, and the ANTI-BOT RULES text:
+
+            You are testing the hypotheses for ONE target API endpoint. Do only this one. Authorized, live,
+            SAFE-BY-DEFAULT — never send destructive/mutating requests (document them as destructive-skipped).
+            Targets: {{ targets }}. Capture: {{ capture }}. SDK: {{ workspace }}/sdk/. Vault: api-security-assessment.
+            Domain: <HOST>. Attacker identity source item: <IDENTITY_INDEX>. Victim user id: <VICTIM_ID>.
+            Corpus User-Agent: <UA>. Anti-bot rules: <RULES>.
+            1. Compute the slug and read the hypotheses:
+                 python3 /mnt/skill_library/api-recon-toolkit/scripts/targets.py show {{ targets }} --index <INDEX> --part both
+                 python3 /mnt/skill_library/api-recon-toolkit/scripts/vault_note.py slug "<METHOD> <PATH>"
+                 obsidian vault=api-security-assessment read file="<HOST>/endpoints/<slug>.md"
+            2. For EACH hypothesis:
+               - Destructive/mutating? Do NOT send. Note it as destructive-skipped, reference
+                 [[BLK-destructive-skipped]], and register that blocker.
+               - Otherwise test it. Authenticate WITHOUT printing the token — capture it in the SAME
+                 command with $(...):
+                   TOKEN=$(python3 /mnt/skill_library/api-recon-toolkit/scripts/burp.py cred {{ capture }} --index <IDENTITY_INDEX> --field authorization); \
+                   curl -sS -X <METHOD> "https://<HOST><path>" -H "Authorization: $TOKEN" -H "User-Agent: <UA>" <other captured headers> <data>
+                 For a PRIVACY/IDOR test, authenticate as the ATTACKER and request the VICTIM's id; a 2xx
+                 that returns the victim's PII fields = CONFIRMED privacy leak. Record PII by FIELD
+                 NAME/presence, never raw values.
+            3. Write results to {{ workspace }}/test/<slug>.log.md (write_file):
+                 ## Test log
+                 ### H1 — <confirmed | not-vulnerable | inconclusive | blocked>
+                 - Attempt: <method path, identity used, UA>
+                 - Result: <status + minimal evidence (PII as field names)>
+                 - Blocker (if any): [[BLK-<slug>]] — <one line>
+               Append it: python3 /mnt/skill_library/api-recon-toolkit/scripts/vault_note.py append --vault api-security-assessment --domain <HOST> --slug <slug> --from {{ workspace }}/test/<slug>.log.md
+            4. For every blocker you hit, register it (idempotent). Write a one-line description to
+               {{ workspace }}/test/<slug>.blk.md, then:
+                 python3 /mnt/skill_library/api-recon-toolkit/scripts/vault_note.py blocker --vault api-security-assessment --domain <HOST> --id <blocker-slug> --endpoint <slug> --desc-from {{ workspace }}/test/<slug>.blk.md
+               Blocker slugs (prefer these): no-second-account, no-victim-id, auth-expired, waf-403,
+               rate-limited, mfa-required, destructive-skipped, endpoint-unreachable, needs-write-scope.
+            5. Reply ONE line: "<METHOD> <PATH> -> confirmed=<n> blocked=<n>".
+
+          STEP C — report (you do this): after all sub-agents report, write {{ outputs }}/test-report.md —
+          confirmed findings by severity (call out privacy/PII leaks), plus a blocker table: for each
+          BLK-*.md under <HOST>/blockers/, its id, status, and the count of affected endpoints. Call
+          present_files on {{ outputs }}/test-report.md.
