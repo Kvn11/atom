@@ -195,3 +195,13 @@ def test_test_lead_builds_roster_file_and_subagent_self_selects():
     assert "findings.py add" in p and "{{ workspace }}/findings.jsonl" in p
     assert "## Test log — {{ date }}" in p
     assert "destructive-skipped" in p and "safe-by-default" in p.lower()
+
+
+def test_every_lead_has_contract_and_single_batch():
+    for t in _all_tasks():
+        p = t.prompt
+        assert "COORDINATOR CONTRACT" in p
+        assert "in ONE message" in p
+        assert "Do NOT" in p
+        assert 'subagent_type="bash"' in p
+        assert t.recursion_limit == 600
