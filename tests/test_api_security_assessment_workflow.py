@@ -167,3 +167,21 @@ def test_confirm_is_thin_and_inlines_antibot():
     assert "mint-once" in p                   # the rules appear literally
     # preserved gates from the confirm phase
     assert "SAFETY GATE" in p and "verbatim" in p.lower()
+
+
+def test_test_lead_builds_roster_file_and_subagent_self_selects():
+    p = _task_at(2, 0)  # Test step
+    assert "COORDINATOR CONTRACT" in p and "in ONE message" in p
+    # lead writes the roster ONCE to a file (endpoint-independent) — still uses burp.py identities
+    assert "burp.py identities" in p and "identities.json" in p
+    # lead no longer computes a per-endpoint attacker/victim mapping
+    assert "You will pass the relevant identities" not in p
+    assert "<RULES>" not in p                      # anti-bot rules are literal in the sub-agent block
+    # the sub-agent self-selects from the roster
+    assert "Pick your identities from the roster" in p
+    assert "source_indices" in p and "user_ids" in p
+    # preserved: tokenless idiom + cookie minting + findings emission + safety
+    assert "TOKEN=$(" in p and "--field authorization" in p and "--field cookie" in p
+    assert "findings.py add" in p and "{{ workspace }}/findings.jsonl" in p
+    assert "## Test log — {{ date }}" in p
+    assert "destructive-skipped" in p and "safe-by-default" in p.lower()

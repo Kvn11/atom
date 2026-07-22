@@ -225,62 +225,84 @@ steps:
         recursion_limit: 600
         prompt: |
           You are the LEAD coordinating AUTHORIZED live testing of your org's own API targets.
-          Targets: {{ targets }}. Capture: {{ capture }}. SDK: {{ workspace }}/sdk/. Reusable values:
-          {{ workspace }}/recon/values.json. Toolkit at /mnt/skill_library/api-recon-toolkit/scripts/.
-          Vault: api-security-assessment.
+          Targets: {{ targets }}. Capture: {{ capture }}. SDK: {{ workspace }}/sdk/. Toolkit at
+          /mnt/skill_library/api-recon-toolkit/scripts/. Vault: api-security-assessment.
 
-          YOU ARE A COORDINATOR. Do NOT test endpoints yourself — delegate each to a sub-agent.
+          COORDINATOR CONTRACT (read this first — it governs everything below):
+          - Your job is ONLY: run the two endpoint-independent setup calls, fan out one bash sub-agent
+            per target endpoint, then report. You NEVER test or prep a single endpoint yourself.
+          - Fan out ALL endpoints in ONE message: emit EVERY delegate_task call together in a single
+            turn, then STOP and wait for their replies. NEVER delegate one endpoint, look at its
+            result, then delegate the next — that serial loop is what exhausts your step budget.
+          - Every delegate_task MUST set subagent_type="bash" (a general-purpose sub-agent has no
+            shell and cannot run the toolkit — it will fail).
+          - Do NOT inspect a single endpoint yourself. These are SUB-AGENT-ONLY and you must NEVER run
+            them: burp.py view, burp.py cred, burp.py decode-auth, targets.py show, vault_note.py slug,
+            obsidian read, or any per-endpoint probe or note write. Do NOT open identities.json or pick
+            attacker/victim identities — each sub-agent does that itself. If you catch yourself about to
+            inspect ONE endpoint, STOP and delegate it instead.
+          - After fan-out, do nothing per-endpoint: read only the sub-agents' one-line replies, then
+            write the STEP C report.
 
           SAFETY (safe-by-default): only NON-DESTRUCTIVE probes may be sent (reads / non-mutating). For
           any state-changing/destructive hypothesis (DELETE, account/data mutation, password/email
-          change), DOCUMENT the exact probe but DO NOT SEND it — mark it destructive-skipped.
+          change), the sub-agent DOCUMENTS the exact probe but DOES NOT SEND it — marked
+          destructive-skipped.
 
-          STEP A — build the identity roster (you do this): the capture holds all in-scope identities/test
-          accounts. Enumerate them:
-            python3 /mnt/skill_library/api-recon-toolkit/scripts/burp.py identities {{ capture }} --format json
-          Note each identity's user id, source item index, cookie names, and user-agent; and the corpus
-          User-Agent/header style from {{ workspace }}/recon/values.json. You will pass the relevant
-          identities to each sub-agent (an ATTACKER identity + a VICTIM user id for cross-user/privacy tests).
+          STEP A — two endpoint-independent calls (you do this; NO per-endpoint reasoning):
+            python3 /mnt/skill_library/api-recon-toolkit/scripts/targets.py list {{ targets }} --format json
+          Keep the domain (call it <HOST>) and the list of endpoint indices — nothing else.
+            mkdir -p {{ workspace }}/recon && python3 /mnt/skill_library/api-recon-toolkit/scripts/burp.py identities {{ capture }} --format json > {{ workspace }}/recon/identities.json
+          That writes the identity roster (every in-scope test account, each with source_indices /
+          user_ids / user_agents) to a file the sub-agents read themselves. Do NOT open it and do NOT
+          pick attacker/victim identities — each sub-agent selects its own from the roster.
 
-          ANTI-BOT RULES — copy these into EVERY sub-agent prompt: mint-once (reuse a captured token;
-          re-mint only on a 401, never pre-emptively); use a corpus User-Agent, never curl/python
-          defaults; send the full captured header set; throttle to <=2 req/s per endpoint with 50-200ms
-          jitter; use captured identifiers, never enumerate id spaces; on a 403/500/"inactive"/"No active
-          account" lockout signal, STOP and record a blocker.
+          STEP B — fan out (ONE message, all at once): call delegate_task once per index from STEP A,
+          ALL in a single turn, subagent_type="bash" (REQUIRED). The ONLY value that varies between the
+          calls is <INDEX>; <HOST> is identical for every one. Give each sub-agent this EXACT prompt,
+          substituting <INDEX> and <HOST>:
 
-          STEP B — call delegate_task to run one sub-agent PER target endpoint (subagent_type="bash",
-          REQUIRED). You may run several in parallel (atom caps concurrency at 4). Give each this EXACT
-          prompt, substituting
-          <INDEX>/<HOST>, the ATTACKER identity's source item index (<IDENTITY_INDEX>), a VICTIM user id,
-          the corpus User-Agent, and the ANTI-BOT RULES text:
+            You are testing the hypotheses for ONE target API endpoint. Do only this one. Authorized,
+            live, SAFE-BY-DEFAULT — never send destructive/mutating requests (document them as
+            destructive-skipped). Targets: {{ targets }}. Capture: {{ capture }}. SDK: {{ workspace }}/sdk/.
+            Vault: api-security-assessment. Domain: <HOST>. Identity roster: {{ workspace }}/recon/identities.json.
 
-            You are testing the hypotheses for ONE target API endpoint. Do only this one. Authorized, live,
-            SAFE-BY-DEFAULT — never send destructive/mutating requests (document them as destructive-skipped).
-            Targets: {{ targets }}. Capture: {{ capture }}. SDK: {{ workspace }}/sdk/. Vault: api-security-assessment.
-            Domain: <HOST>. Attacker identity source item: <IDENTITY_INDEX>. Victim user id: <VICTIM_ID>.
-            Corpus User-Agent: <UA>. Anti-bot rules: <RULES>.
-            1. Compute the slug and read the hypotheses:
+            ANTI-BOT RULES (obey all): mint-once (reuse a captured token; re-mint only on a 401, never
+            pre-emptively); use a corpus User-Agent, never curl/python defaults; send the full captured
+            header set; throttle to <=2 req/s per endpoint with 50-200ms jitter; use captured
+            identifiers, never enumerate id spaces; on a 403/500/"inactive"/"No active account" lockout
+            signal, STOP and record a blocker.
+
+            1. Pick your identities from the roster yourself:
+                 cat {{ workspace }}/recon/identities.json
+               Choose an ATTACKER identity: use its source_indices[0] as <IDENTITY_INDEX> (for
+               `burp.py cred`) and its user_agents[0] as the User-Agent <UA>. Choose a VICTIM = a
+               DIFFERENT identity and use its user_ids[0] as <VICTIM_ID>. If the roster has only ONE
+               identity there is no victim: register a `no-victim-id` blocker (step 5) and mark every
+               cross-user/privacy hypothesis blocked.
+            2. Compute the slug and read the hypotheses:
                  python3 /mnt/skill_library/api-recon-toolkit/scripts/targets.py show {{ targets }} --index <INDEX> --part both
                  python3 /mnt/skill_library/api-recon-toolkit/scripts/vault_note.py slug "<METHOD> <PATH>"
                  obsidian vault=api-security-assessment read file="<HOST>/endpoints/<slug>.md"
-            2. For EACH hypothesis:
+               Take <METHOD> and <PATH> from the targets.py show output.
+            3. For EACH hypothesis:
                - Destructive/mutating? Do NOT send. Note it as destructive-skipped, reference
                  [[BLK-destructive-skipped]], and register that blocker.
                - Otherwise test it. Authenticate WITHOUT printing the token — capture it in the SAME
                  command with $(...):
                    TOKEN=$(python3 /mnt/skill_library/api-recon-toolkit/scripts/burp.py cred {{ capture }} --index <IDENTITY_INDEX> --field authorization); \
                    curl -sS -X <METHOD> "https://<HOST><path>" -H "Authorization: $TOKEN" -H "User-Agent: <UA>" <other captured headers> <data>
-                 For a PRIVACY/IDOR test, authenticate as the ATTACKER and request the VICTIM's id; a 2xx
-                 that returns the victim's PII fields = CONFIRMED privacy leak. Record PII by FIELD
-                 NAME/presence, never raw values.
-            3. Write results to {{ workspace }}/test/<slug>.log.md (write_file):
+                 For a PRIVACY/IDOR test, authenticate as the ATTACKER and request the VICTIM's id
+                 (<VICTIM_ID>); a 2xx that returns the victim's PII fields = CONFIRMED privacy leak.
+                 Record PII by FIELD NAME/presence, never raw values.
+            4. Write results to {{ workspace }}/test/<slug>.log.md (write_file):
                  ## Test log — {{ date }}
                  ### H1 — <confirmed | not-vulnerable | inconclusive | blocked>
                  - Attempt: <method path, identity used, UA>
                  - Result: <status + minimal evidence (PII as field names)>
                  - Blocker (if any): [[BLK-<slug>]] — <one line>
                Append it: python3 /mnt/skill_library/api-recon-toolkit/scripts/vault_note.py append --vault api-security-assessment --domain <HOST> --slug <slug> --from {{ workspace }}/test/<slug>.log.md
-            3b. For each hypothesis you CONFIRMED (a real, reproduced vulnerability — especially a
+            4b. For each hypothesis you CONFIRMED (a real, reproduced vulnerability — especially a
                 privacy/PII leak), emit a structured finding. Write {{ workspace }}/test/<slug>.<Hn>.finding.json
                 (write_file) as:
                   {"title": "<one-line vuln title>",
@@ -295,12 +317,12 @@ steps:
                   python3 /mnt/skill_library/api-recon-toolkit/scripts/findings.py add --from {{ workspace }}/test/<slug>.<Hn>.finding.json --to {{ workspace }}/findings.jsonl
                 (findings.py REJECTS a raw JWT — if it errors, or if any credential is a literal, fix the
                 evidence to mint it with $(...).)
-            4. For every blocker you hit, register it (idempotent). Write a one-line description to
+            5. For every blocker you hit, register it (idempotent). Write a one-line description to
                {{ workspace }}/test/<slug>.blk.md, then:
                  python3 /mnt/skill_library/api-recon-toolkit/scripts/vault_note.py blocker --vault api-security-assessment --domain <HOST> --id <blocker-slug> --endpoint <slug> --desc-from {{ workspace }}/test/<slug>.blk.md
                Blocker slugs (prefer these): no-second-account, no-victim-id, auth-expired, waf-403,
                rate-limited, mfa-required, destructive-skipped, endpoint-unreachable, needs-write-scope.
-            5. Reply ONE line: "<METHOD> <PATH> -> confirmed=<n> findings=<n> blocked=<n>".
+            6. Reply ONE line: "<METHOD> <PATH> -> confirmed=<n> findings=<n> blocked=<n>".
 
           STEP C — report (you do this): after all sub-agents report, write {{ outputs }}/test-report.md —
           confirmed findings by severity (call out privacy/PII leaks), the count of findings emitted to
