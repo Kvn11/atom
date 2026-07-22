@@ -303,7 +303,7 @@ steps:
                - Otherwise test it. Authenticate WITHOUT printing the token — capture it in the SAME
                  command with $(...):
                    TOKEN=$(python3 /mnt/skill_library/api-recon-toolkit/scripts/burp.py cred {{ capture }} --index <IDENTITY_INDEX> --field authorization); \
-                   curl -sS -X <METHOD> "https://<HOST><path>" -H "Authorization: $TOKEN" -H "User-Agent: <UA>" <other captured headers> <data>
+                   curl -sS -X <METHOD> "https://<HOST><PATH>" -H "Authorization: $TOKEN" -H "User-Agent: <UA>" <other captured headers> <data>
                  For a PRIVACY/IDOR test, authenticate as the ATTACKER and request the VICTIM's id
                  (<VICTIM_ID>); a 2xx that returns the victim's PII fields = CONFIRMED privacy leak.
                  Record PII by FIELD NAME/presence, never raw values.
@@ -319,7 +319,7 @@ steps:
                 (write_file) as:
                   {"title": "<one-line vuln title>",
                    "description": "<what an unauthorized caller obtains and why it is a vuln — PII by field name, never raw values>",
-                   "evidence": ["<the EXACT tokenless one-liner that reproduced it: TOKEN=$(python3 /mnt/skill_library/api-recon-toolkit/scripts/burp.py cred {{ capture }} --index <IDENTITY_INDEX> --field authorization); curl -sS -X <METHOD> 'https://<HOST><path>' -H \"Authorization: $TOKEN\" -H 'User-Agent: <UA>' <other headers>>"]}
+                   "evidence": ["<the EXACT tokenless one-liner that reproduced it: TOKEN=$(python3 /mnt/skill_library/api-recon-toolkit/scripts/burp.py cred {{ capture }} --index <IDENTITY_INDEX> --field authorization); curl -sS -X <METHOD> 'https://<HOST><PATH>' -H \"Authorization: $TOKEN\" -H 'User-Agent: <UA>' <other headers>>"]}
                 NEVER put a live credential in evidence — mint EVERY credential inline with $(...), not
                 just the bearer token. If the endpoint authenticates by cookie or another captured header
                 instead of (or in addition to) Authorization, mint THAT too and reference the variable:
