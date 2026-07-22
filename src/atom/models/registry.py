@@ -1,8 +1,10 @@
-"""Model registry + factory across Anthropic, OpenAI, Gemini, and Alibaba Qwen.
+"""Model registry + factory across Anthropic, OpenAI, Gemini, Alibaba Qwen, and AWS Bedrock.
 
 ``init_chat_model`` natively covers anthropic/openai/google_genai; Qwen (DashScope) is not a
-recognized provider, so it is built directly via ``langchain_qwq.ChatQwen``. Context window and
-capability flags come from the live ``model.profile`` at runtime (see
+recognized provider, so it is built directly via ``langchain_qwq.ChatQwen``. Bedrock models route
+through a Bifrost gateway (see :func:`_build_bedrock`) and are built directly as well, since
+``init_chat_model`` would otherwise dispatch to LangChain's native boto3/SigV4 Bedrock path.
+Context window and capability flags come from the live ``model.profile`` at runtime (see
 :mod:`atom.models.profiles`); the static fields here are fallbacks for when a profile is missing
 (notably Qwen / brand-new models).
 """
@@ -169,8 +171,8 @@ def _thinking_overrides(spec: ModelSpec, thinking: Any) -> dict[str, Any]:
 
     Accepts: None (provider default), "off"/False, "adaptive", an effort str
     ("minimal"/"low"/"medium"/"high"), or an int token budget (or its string form).
-    All four providers honor int budgets and effort strings; ``adaptive`` is Anthropic-Opus-only
-    and is downgraded to an enabled budget elsewhere.
+    All providers with a thinking branch honor int budgets and effort strings; ``adaptive`` is
+    Anthropic-Opus-only and is downgraded to an enabled budget elsewhere.
     """
     if thinking is None:
         return {}
@@ -242,8 +244,45 @@ def build_model(key: str, *, thinking: Any = None, **overrides: Any) -> BaseChat
         from langchain.chat_models import init_chat_model
 
         return init_chat_model(spec.init_str, **kwargs)
+    if spec.provider == "bedrock":
+        return _build_bedrock(spec, kwargs)
     # Qwen: init_chat_model has no dashscope provider.
     from langchain_qwq import ChatQwen
 
     kwargs.setdefault("api_base", spec.base_url)
     return ChatQwen(model=spec.model_name, **kwargs)
+
+
+def _build_bedrock(spec: ModelSpec, kwargs: dict[str, Any]) -> BaseChatModel:
+    """Construct a Bedrock model routed through the Bifrost gateway.
+
+    Base URL (gateway root) and the Bifrost virtual key come from env. The key is carried in the
+    ``x-bf-vk`` header (authoritative for Bifrost) and also as ``api_key``. The model is sent as
+    ``bedrock/<runtime id>``; ``wire`` picks the drop-in endpoint suffix and the LangChain class.
+    We construct the client classes directly (never ``init_chat_model``), which would otherwise
+    dispatch to LangChain's native boto3/SigV4 Bedrock path and bypass the gateway.
+    """
+    import os
+
+    root = os.environ.get("ATOM_BIFROST_BASE_URL")
+    api_key = os.environ.get("ATOM_BIFROST_API_KEY")
+    if not root or not api_key:
+        raise RuntimeError(
+            f"Model '{spec.key}' requires ATOM_BIFROST_BASE_URL and ATOM_BIFROST_API_KEY to be set."
+        )
+    root = root.rstrip("/")
+    common: dict[str, Any] = dict(
+        model=f"bedrock/{spec.model_name}",
+        api_key=api_key,
+        default_headers={"x-bf-vk": api_key},
+        **kwargs,  # includes thinking/extra_body + max_retries/timeout
+    )
+    if spec.wire == "anthropic":
+        from langchain_anthropic import ChatAnthropic
+
+        return ChatAnthropic(base_url=f"{root}/anthropic", **common)
+    if spec.wire == "openai":
+        from langchain_openai import ChatOpenAI
+
+        return ChatOpenAI(base_url=f"{root}/openai", **common)
+    raise RuntimeError(f"Bedrock model '{spec.key}' has an invalid wire: {spec.wire!r}")

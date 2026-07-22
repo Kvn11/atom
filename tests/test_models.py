@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from atom.models.registry import _thinking_overrides, build_model, clamp_concurrency, resolve_spec
 
 
@@ -173,3 +175,55 @@ def test_direct_anthropic_thinking_unchanged_after_refactor():
     assert _thinking_overrides(resolve_spec("haiku"), 16000) == {
         "thinking": {"type": "enabled", "budget_tokens": 16000}}
     assert _thinking_overrides(resolve_spec("haiku"), "adaptive")["thinking"]["type"] == "enabled"
+
+
+def test_build_model_bedrock_anthropic_wire(monkeypatch):
+    captured: dict = {}
+
+    class FakeChatAnthropic:
+        def __init__(self, **kw):
+            captured.update(kw)
+            captured["_cls"] = "anthropic"
+
+    import langchain_anthropic
+    monkeypatch.setattr(langchain_anthropic, "ChatAnthropic", FakeChatAnthropic)
+    monkeypatch.setenv("ATOM_BIFROST_BASE_URL", "https://bifrost.example.com/")  # trailing slash
+    monkeypatch.setenv("ATOM_BIFROST_API_KEY", "vk_test")
+
+    build_model("bedrock-opus", thinking="adaptive")
+    assert captured["_cls"] == "anthropic"
+    assert captured["base_url"] == "https://bifrost.example.com/anthropic"  # slash normalized, suffix added
+    assert captured["model"] == "bedrock/us.anthropic.claude-opus-4-8"
+    assert captured["default_headers"] == {"x-bf-vk": "vk_test"}
+    assert captured["api_key"] == "vk_test"
+    assert captured["thinking"] == {"type": "adaptive"}
+    assert captured["max_retries"] == 1
+    assert captured["timeout"] == 120.0
+
+
+def test_build_model_bedrock_openai_wire(monkeypatch):
+    captured: dict = {}
+
+    class FakeChatOpenAI:
+        def __init__(self, **kw):
+            captured.update(kw)
+            captured["_cls"] = "openai"
+
+    import langchain_openai
+    monkeypatch.setattr(langchain_openai, "ChatOpenAI", FakeChatOpenAI)
+    monkeypatch.setenv("ATOM_BIFROST_BASE_URL", "https://bifrost.example.com")
+    monkeypatch.setenv("ATOM_BIFROST_API_KEY", "vk_test")
+
+    build_model("bedrock-kimi-thinking", thinking="high")
+    assert captured["_cls"] == "openai"
+    assert captured["base_url"] == "https://bifrost.example.com/openai"
+    assert captured["model"] == "bedrock/moonshot.kimi-k2-thinking"
+    assert captured["default_headers"] == {"x-bf-vk": "vk_test"}
+    assert captured["extra_body"] == {"reasoning": {"max_tokens": 24576}}
+
+
+def test_build_model_bedrock_missing_env_raises(monkeypatch):
+    monkeypatch.delenv("ATOM_BIFROST_BASE_URL", raising=False)
+    monkeypatch.delenv("ATOM_BIFROST_API_KEY", raising=False)
+    with pytest.raises(RuntimeError, match="ATOM_BIFROST_BASE_URL"):
+        build_model("bedrock-haiku")
