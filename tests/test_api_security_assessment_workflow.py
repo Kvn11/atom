@@ -141,3 +141,29 @@ def test_test_prompt_is_safe_by_default_with_antibot_and_blockers():
     assert "burp.py cred" in p and "$(" in p  # raw token only via $(...) capture
     assert "mint-once" in p.lower()           # anti-bot rules present
     assert "vault_note.py blocker" in p and "[[BLK-" in p
+
+
+# NOTE: named `_task_at` (not `_task`) to avoid clobbering the string-keyed `_task(name)`
+# helper above, which several pinned tests already rely on.
+def _task_at(step_idx, task_idx=0):
+    return _load().steps[step_idx].tasks[task_idx].prompt
+
+
+def test_build_sdk_and_hypothesize_are_thin_coordinators():
+    build_sdk = _task_at(0, 1)   # Setup step, second task
+    hypothesize = _task_at(1, 0)  # Hypothesize step
+    for p in (build_sdk, hypothesize):
+        assert "COORDINATOR CONTRACT" in p
+        assert "in ONE message" in p          # single-turn fan-out discipline
+        assert "Do NOT inspect" in p
+        assert 'subagent_type="bash"' in p
+
+
+def test_confirm_is_thin_and_inlines_antibot():
+    p = _task_at(3, 0)  # Confirm step
+    assert "COORDINATOR CONTRACT" in p
+    assert "in ONE message" in p
+    assert "<RULES>" not in p                 # anti-bot rules are literal, not lead-injected
+    assert "mint-once" in p                   # the rules appear literally
+    # preserved gates from the confirm phase
+    assert "SAFETY GATE" in p and "verbatim" in p.lower()

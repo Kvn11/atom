@@ -107,17 +107,27 @@ steps:
           authorized security assessment. Your ONLY input this task is the targets file at: {{ targets }}
           The toolkit is at /mnt/skill_library/api-recon-toolkit/scripts/ (run with python3 <abs path>).
 
-          YOU ARE A COORDINATOR. Do NOT inspect individual targets yourself — writing every endpoint's
-          method in your own context risks the recursion limit. Authoring each endpoint's SDK function is
-          SUB-AGENT work (STEP B). Your job is: list, delegate, assemble.
+          COORDINATOR CONTRACT (read this first — it governs everything below):
+          - Your job is ONLY: list the scope, fan out one bash sub-agent per target endpoint, then
+            assemble. You NEVER author an endpoint's SDK function yourself.
+          - Fan out ALL endpoints in ONE message: emit EVERY delegate_task call together in a single
+            turn, then STOP and wait for their replies. NEVER delegate one endpoint, look at its
+            result, then delegate the next — that serial loop is what exhausts your step budget.
+          - Every delegate_task MUST set subagent_type="bash" (a general-purpose sub-agent has no
+            shell and cannot run the toolkit — it will fail).
+          - Do NOT inspect a single endpoint yourself. These are SUB-AGENT-ONLY and you must NEVER run
+            them: targets.py show, vault_note.py slug, or any per-endpoint file write. If you catch
+            yourself about to inspect ONE endpoint, STOP and delegate it instead.
+          - After fan-out, do nothing per-endpoint: read only the sub-agents' one-line replies, then
+            do STEP C (assemble).
 
           STEP A — list the scope (you do this):
             python3 /mnt/skill_library/api-recon-toolkit/scripts/targets.py list {{ targets }} --format json
           Keep the domain and the list of endpoint indices.
 
-          STEP B — DELEGATE one sub-agent PER target endpoint. For EACH index, call delegate_task with
-          subagent_type="bash" (REQUIRED — a general-purpose sub-agent has no shell and will fail). You may
-          issue several delegate_task calls together to run in parallel. Give each sub-agent this EXACT
+          STEP B — fan out (ONE message, all at once): for EACH index from STEP A, call delegate_task,
+          ALL in a single turn, subagent_type="bash" (REQUIRED — a general-purpose sub-agent has no
+          shell and will fail). The ONLY value that varies is <INDEX>. Give each sub-agent this EXACT
           prompt, substituting <INDEX>:
 
             You are authoring ONE Python SDK function for a target API. Do only this one.
@@ -151,17 +161,28 @@ steps:
           /mnt/skill_library/api-recon-toolkit/scripts/. Vault: api-security-assessment (notes split by
           DOMAIN at the root: <domain>/endpoints/<slug>.md).
 
-          YOU ARE A COORDINATOR. Do NOT analyze endpoints yourself — that is SUB-AGENT work and looping
-          over many endpoints will hit the recursion limit. Your job: list, delegate, summarize.
+          COORDINATOR CONTRACT (read this first — it governs everything below):
+          - Your job is ONLY: list the targets, fan out one bash sub-agent per target endpoint, then
+            summarize. You NEVER analyze an endpoint yourself.
+          - Fan out ALL endpoints in ONE message: emit EVERY delegate_task call together in a single
+            turn, then STOP and wait for their replies. NEVER delegate one endpoint, look at its
+            result, then delegate the next — that serial loop is what exhausts your step budget.
+          - Every delegate_task MUST set subagent_type="bash" (a general-purpose sub-agent has no
+            shell and cannot run the toolkit — it will fail).
+          - Do NOT inspect a single endpoint yourself. These are SUB-AGENT-ONLY and you must NEVER run
+            them: targets.py show, vault_note.py slug, obsidian read, or any per-endpoint note write. If
+            you catch yourself about to inspect ONE endpoint, STOP and delegate it instead.
+          - After fan-out, do nothing per-endpoint: read only the sub-agents' one-line replies, then
+            write the STEP C summary.
 
           STEP A — list the targets (you do this):
             python3 /mnt/skill_library/api-recon-toolkit/scripts/targets.py list {{ targets }} --format json
           Keep the domain (call it <HOST>) and the endpoint indices.
 
-          STEP B — DELEGATE one sub-agent PER target endpoint. For EACH index, call delegate_task with
-          subagent_type="bash" (REQUIRED — a general-purpose sub-agent has no shell and will fail). You
-          may issue several together to run in parallel. Give each sub-agent this EXACT prompt,
-          substituting <INDEX> and <HOST>:
+          STEP B — fan out (ONE message, all at once): for EACH index from STEP A, call delegate_task,
+          ALL in a single turn, subagent_type="bash" (REQUIRED — a general-purpose sub-agent has no
+          shell and will fail). The values that vary are <INDEX> (and <HOST>, identical for all). Give
+          each sub-agent this EXACT prompt, substituting <INDEX> and <HOST>:
 
             You are developing security + privacy hypotheses for ONE target API endpoint. Do only this one.
             Targets: {{ targets }}. Reusable values: {{ workspace }}/recon/values.json.
@@ -300,8 +321,19 @@ steps:
           {{ workspace }}/findings.jsonl. Capture (identities/tokens): {{ capture }}. Toolkit at
           /mnt/skill_library/api-recon-toolkit/scripts/. Vault: api-security-assessment.
 
-          YOU ARE A COORDINATOR. Do NOT reproduce findings yourself — delegate each to a sub-agent.
-          Looping over findings in your own context will hit the recursion limit.
+          COORDINATOR CONTRACT (read this first — it governs everything below):
+          - Your job is ONLY: list the findings, fan out one bash sub-agent per finding, then assemble
+            the deliverable. You NEVER reproduce a finding yourself.
+          - Fan out ALL findings in ONE message: emit EVERY delegate_task call together in a single
+            turn, then STOP and wait for their replies. NEVER delegate one finding, look at its result,
+            then delegate the next — that serial loop is what exhausts your step budget.
+          - Every delegate_task MUST set subagent_type="bash" (a general-purpose sub-agent has no
+            shell and cannot run the toolkit — it will fail).
+          - Do NOT reproduce a finding yourself. Running findings.py show or the evidence curl commands
+            is SUB-AGENT-ONLY. If you catch yourself about to reproduce ONE finding, STOP and delegate
+            it instead. (findings.py list is corpus-wide — that one you DO run in STEP A.)
+          - After fan-out, do nothing per-finding: read only the sub-agents' one-line replies, then do
+            STEP C (assemble).
 
           STEP A — list the findings (you do this):
             python3 /mnt/skill_library/api-recon-toolkit/scripts/findings.py list {{ workspace }}/findings.jsonl --format json
@@ -317,16 +349,18 @@ steps:
 
           SAFETY: reproduction is live but SAFE-BY-DEFAULT. If a finding's evidence is destructive
           /mutating, do NOT re-send it — discard it with reason "destructive — not re-sent".
-          ANTI-BOT: mint-once (reuse the captured token; re-mint only on a 401), corpus User-Agent,
-          throttle <=2 req/s. Copy these rules into every sub-agent prompt.
+          ANTI-BOT: the sub-agent block below already contains these rules literally — you do not
+          inject them.
 
-          STEP B — call delegate_task to run one sub-agent PER finding index (subagent_type="bash",
-          REQUIRED — a general-purpose sub-agent has no shell and will fail). You may run several in
-          parallel (atom caps concurrency at 4). Give each this EXACT prompt, substituting <N> and the
-          ANTI-BOT rules text:
+          STEP B — fan out (ONE message, all at once): call delegate_task once per finding index, ALL
+          in a single turn, subagent_type="bash" (REQUIRED — a general-purpose sub-agent has no shell
+          and will fail). The ONLY value that varies is <N>. Give each this EXACT prompt, substituting
+          <N>:
 
             You are reproducing ONE security finding. Do only this one. Authorized, live, SAFE-BY-DEFAULT.
-            Raw findings: {{ workspace }}/findings.jsonl. Anti-bot rules: <RULES>.
+            Raw findings: {{ workspace }}/findings.jsonl.
+            ANTI-BOT RULES (obey all): mint-once (reuse the captured token; re-mint only on a 401),
+            corpus User-Agent (never curl/python defaults), throttle <=2 req/s.
             1. Read the finding (title, description, evidence commands):
                  python3 /mnt/skill_library/api-recon-toolkit/scripts/findings.py show {{ workspace }}/findings.jsonl --index <N>
             1b. SAFETY GATE (safe-by-default) — inspect the evidence commands BEFORE running anything. If
