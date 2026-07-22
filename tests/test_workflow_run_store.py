@@ -64,9 +64,20 @@ def test_serialize_messages_shape():
     out = serialize_messages(msgs)
     # The opening prompt of a workflow task is authored by the automated workflow, not a human.
     assert out[0] == {"role": "task", "text": "do it"}
-    assert out[1]["tool_calls"] == [{"name": "write_file", "args": {"path": "p"}}]
+    assert out[1]["tool_calls"] == [{"name": "write_file", "args": {"path": "p"}, "id": "c1"}]
     assert out[2]["role"] == "tool" and out[2]["name"] == "write_file"
+    assert out[2]["tool_call_id"] == "c1" and out[2]["is_error"] is False
     assert out[3]["text"] == "done"
+
+
+def test_serialize_messages_marks_tool_error():
+    msgs = [
+        AIMessage(content="", tool_calls=[{"name": "delegate_task", "args": {}, "id": "d1", "type": "tool_call"}]),
+        ToolMessage(content="[sub-agent 'x' timed out after 900s]", tool_call_id="d1", status="error"),
+    ]
+    out = serialize_messages(msgs)
+    assert out[0]["tool_calls"][0]["id"] == "d1"
+    assert out[1]["tool_call_id"] == "d1" and out[1]["is_error"] is True
 
 
 def test_serialize_messages_relabels_only_first_human():

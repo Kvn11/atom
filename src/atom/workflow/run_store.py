@@ -116,10 +116,16 @@ def serialize_messages(messages: list) -> list[dict]:
         entry: dict = {"role": role, "text": message_text(m)}
         tcs = getattr(m, "tool_calls", None)
         if tcs:
-            entry["tool_calls"] = [{"name": c.get("name"), "args": c.get("args", {})} for c in tcs]
+            entry["tool_calls"] = [
+                {"name": c.get("name"), "args": c.get("args", {}), "id": c.get("id")} for c in tcs
+            ]
         name = getattr(m, "name", None)
         if name:
             entry["name"] = name
+        tcid = getattr(m, "tool_call_id", None)
+        if tcid:  # a ToolMessage — record the call it answers and whether it errored
+            entry["tool_call_id"] = tcid
+            entry["is_error"] = getattr(m, "status", None) == "error"
         out.append(entry)
     return out
 
