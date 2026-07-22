@@ -13,13 +13,14 @@ export interface Manifest {
 }
 export interface ChatMsg {
   role: string; text: string; name?: string;
-  tool_calls?: { name: string; args?: Record<string, unknown> }[];
+  tool_call_id?: string; is_error?: boolean;
+  tool_calls?: { name: string; args?: Record<string, unknown>; id?: string }[];
 }
 export type StreamBlock =
   | { kind: "thinking"; text: string }
   | { kind: "text"; text: string }
   | { kind: "tool_call"; id?: string; name?: string; args?: Record<string, unknown> }
-  | { kind: "tool_result"; name?: string; text: string; isError: boolean };
+  | { kind: "tool_result"; toolCallId?: string; name?: string; text: string; isError: boolean };
 export type TodoStatus = "pending" | "in_progress" | "completed";
 export interface Todo { content: string; status: TodoStatus; }
 export interface RunSummary {

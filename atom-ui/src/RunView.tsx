@@ -747,7 +747,7 @@ function useTaskStream(runId: string, sel: Sel | null, taskStatus: string | unde
         b.type === "thinking_delta" ? { kind: "thinking", text: b.text }
         : b.type === "text_delta" ? { kind: "text", text: b.text }
         : b.type === "tool_call" ? { kind: "tool_call", id: b.id, name: b.name, args: b.args }
-        : { kind: "tool_result", name: b.name, text: b.text, isError: b.is_error });
+        : { kind: "tool_result", toolCallId: b.tool_call_id, name: b.name, text: b.text, isError: b.is_error });
       setBlocks(mapped);
     });
     es.addEventListener("thinking_delta", (e) => { setLastEventAt(Date.now()); appendText("thinking", JSON.parse((e as MessageEvent).data).text); });
@@ -760,7 +760,7 @@ function useTaskStream(runId: string, sel: Sel | null, taskStatus: string | unde
     es.addEventListener("tool_result", (e) => {
       setLastEventAt(Date.now());
       const d = JSON.parse((e as MessageEvent).data);
-      setBlocks((prev) => [...prev, { kind: "tool_result", name: d.name, text: d.text, isError: d.is_error }]);
+      setBlocks((prev) => [...prev, { kind: "tool_result", toolCallId: d.tool_call_id, name: d.name, text: d.text, isError: d.is_error }]);
     });
     const end = () => { setStreaming(false); es.close(); if (esRef.current === es) esRef.current = null; };
     es.addEventListener("done", end);   // terminal frame (carries an `error` field on task failure)
