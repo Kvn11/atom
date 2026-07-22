@@ -220,6 +220,10 @@ def _thinking_overrides(spec: ModelSpec, thinking: Any) -> dict[str, Any]:
 
     if spec.provider == "bedrock":
         if spec.wire == "anthropic":
+            # Opus on Bedrock (4.7/4.8) is adaptive-only: an enabled+budget block returns HTTP 400.
+            # Degrade any positive budget/effort request to adaptive for Opus.
+            if not off and thinking is not None and "claude-opus" in spec.model_name:
+                thinking = "adaptive"
             return _anthropic_thinking(spec, thinking, off)
         # openai-wire: Bifrost maps OpenAI-style reasoning -> Bedrock thinkingConfig (best-effort).
         if off or not spec.supports_reasoning:

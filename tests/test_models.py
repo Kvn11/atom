@@ -153,8 +153,28 @@ def test_bedrock_anthropic_wire_reuses_anthropic_thinking():
     spec = resolve_spec("bedrock-opus")  # bedrock id: us.anthropic.claude-opus-4-8
     # adaptive must be recognized despite the "us.anthropic." prefix (substring match, not startswith)
     assert _thinking_overrides(spec, "adaptive") == {"thinking": {"type": "adaptive"}}
-    assert _thinking_overrides(spec, 8192) == {"thinking": {"type": "enabled", "budget_tokens": 8192}}
+    # Opus on Bedrock is adaptive-only; an int budget degrades to adaptive (see
+    # test_bedrock_opus_forces_adaptive for the full guard coverage).
+    assert _thinking_overrides(spec, 8192) == {"thinking": {"type": "adaptive"}}
     assert _thinking_overrides(spec, "off") == {}
+
+
+def test_bedrock_opus_forces_adaptive():
+    # Claude Opus 4.7/4.8 on Bedrock is adaptive-only: an enabled+budget thinking block
+    # returns HTTP 400. Any positive budget/effort request must degrade to adaptive.
+    spec = resolve_spec("bedrock-opus")
+    assert _thinking_overrides(spec, 8192) == {"thinking": {"type": "adaptive"}}
+    assert _thinking_overrides(spec, "high") == {"thinking": {"type": "adaptive"}}
+    assert _thinking_overrides(spec, "adaptive") == {"thinking": {"type": "adaptive"}}
+    assert _thinking_overrides(spec, "off") == {}
+
+    # Sonnet/non-Opus on Bedrock is unaffected by the guard.
+    sonnet = resolve_spec("bedrock-sonnet")
+    assert _thinking_overrides(sonnet, 8192) == {"thinking": {"type": "enabled", "budget_tokens": 8192}}
+
+    # The guard must not leak into the direct-Anthropic provider path.
+    assert _thinking_overrides(resolve_spec("opus"), 8192) == {
+        "thinking": {"type": "enabled", "budget_tokens": 8192}}
 
 
 def test_bedrock_openai_wire_reasoning_passthrough():
@@ -225,5 +245,5 @@ def test_build_model_bedrock_openai_wire(monkeypatch):
 def test_build_model_bedrock_missing_env_raises(monkeypatch):
     monkeypatch.delenv("ATOM_BIFROST_BASE_URL", raising=False)
     monkeypatch.delenv("ATOM_BIFROST_API_KEY", raising=False)
-    with pytest.raises(RuntimeError, match="ATOM_BIFROST_BASE_URL"):
+    with pytest.raises(RuntimeError, match="ATOM_BIFROST_BASE_URL and ATOM_BIFROST_API_KEY"):
         build_model("bedrock-haiku")
