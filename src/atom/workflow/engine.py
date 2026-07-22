@@ -465,6 +465,7 @@ class WorkflowEngine:
             coro = run_agent(
                 prompt, config=self._task_cfg, profile=self.profile,
                 override_model=td.model, override_thinking=td.thinking,
+                override_recursion_limit=td.recursion_limit,
                 workspace=manifest.workspace_path, uploads=manifest.uploads_path,
                 thread_id=ts.thread_id, trace=trace, prepared=prepared,
                 notes=notes.as_prompt_ctx() if notes else None,

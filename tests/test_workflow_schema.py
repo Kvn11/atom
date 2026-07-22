@@ -196,3 +196,8 @@ def test_unknown_workflow_still_raises(atom_home):
     assert resolve_workflow_path("ghost", str(atom_home)) is None
     with pytest.raises(FileNotFoundError):
         load_workflow("ghost", str(atom_home))
+
+
+def test_taskdef_recursion_limit_defaults_none_and_accepts_int():
+    assert TaskDef(prompt="x").recursion_limit is None
+    assert TaskDef(prompt="x", recursion_limit=600).recursion_limit == 600
