@@ -11,6 +11,15 @@ def _load():
     return WorkflowDef.model_validate(yaml.safe_load(WF.read_text()))
 
 
+def _all_tasks():
+    return [t for s in _load().steps for t in s.tasks]
+
+
+def test_coordinator_tasks_raise_recursion_limit():
+    for t in _all_tasks():
+        assert t.recursion_limit == 600
+
+
 def test_workflow_loads_and_has_expected_shape():
     wf = _load()
     assert wf.name == "api-security-assessment"
@@ -132,3 +141,67 @@ def test_test_prompt_is_safe_by_default_with_antibot_and_blockers():
     assert "burp.py cred" in p and "$(" in p  # raw token only via $(...) capture
     assert "mint-once" in p.lower()           # anti-bot rules present
     assert "vault_note.py blocker" in p and "[[BLK-" in p
+
+
+# NOTE: named `_task_at` (not `_task`) to avoid clobbering the string-keyed `_task(name)`
+# helper above, which several pinned tests already rely on.
+def _task_at(step_idx, task_idx=0):
+    return _load().steps[step_idx].tasks[task_idx].prompt
+
+
+def test_build_sdk_and_hypothesize_are_thin_coordinators():
+    build_sdk = _task_at(0, 1)   # Setup step, second task
+    hypothesize = _task_at(1, 0)  # Hypothesize step
+    for p in (build_sdk, hypothesize):
+        assert "COORDINATOR CONTRACT" in p
+        assert "in ONE message" in p          # single-turn fan-out discipline
+        assert "Do NOT inspect" in p
+        assert 'subagent_type="bash"' in p
+
+
+def test_confirm_is_thin_and_inlines_antibot():
+    p = _task_at(3, 0)  # Confirm step
+    assert "COORDINATOR CONTRACT" in p
+    assert "in ONE message" in p
+    assert "<RULES>" not in p                 # anti-bot rules are literal, not lead-injected
+    assert "mint-once" in p                   # the rules appear literally
+    # preserved gates from the confirm phase
+    assert "SAFETY GATE" in p and "verbatim" in p.lower()
+
+
+def test_capture_recon_is_thin_and_subagent_takes_only_index():
+    p = _task_at(0, 0)  # capture_recon
+    assert "COORDINATOR CONTRACT" in p and "in ONE message" in p
+    assert "substituting only <INDEX>" in p          # index-only delegation
+    assert "<METHOD>/<PATH>/<HOST>" not in p          # old multi-placeholder substitution gone
+    # sub-agent still derives method/path from view and files the note create-if-missing
+    assert "take <method> and <path>" in p.lower()
+    assert "--if-missing" in p and "## Recon — {{ date }}" in p and "--kind recon" in p
+
+
+def test_test_lead_builds_roster_file_and_subagent_self_selects():
+    p = _task_at(2, 0)  # Test step
+    assert "COORDINATOR CONTRACT" in p and "in ONE message" in p
+    # lead writes the roster ONCE to a file (endpoint-independent) — still uses burp.py identities
+    assert "burp.py identities" in p and "identities.json" in p
+    # lead no longer computes a per-endpoint attacker/victim mapping
+    assert "You will pass the relevant identities" not in p
+    assert "<RULES>" not in p                      # anti-bot rules are literal in the sub-agent block
+    # the sub-agent self-selects from the roster
+    assert "Pick your identities from the roster" in p
+    assert "source_indices" in p and "user_ids" in p
+    # preserved: tokenless idiom + cookie minting + findings emission + safety
+    assert "TOKEN=$(" in p and "--field authorization" in p and "--field cookie" in p
+    assert "findings.py add" in p and "{{ workspace }}/findings.jsonl" in p
+    assert "## Test log — {{ date }}" in p
+    assert "destructive-skipped" in p and "safe-by-default" in p.lower()
+
+
+def test_every_lead_has_contract_and_single_batch():
+    for t in _all_tasks():
+        p = t.prompt
+        assert "COORDINATOR CONTRACT" in p
+        assert "in ONE message" in p
+        assert "Do NOT" in p
+        assert 'subagent_type="bash"' in p
+        assert t.recursion_limit == 600

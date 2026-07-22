@@ -37,6 +37,9 @@ class TaskDef(_Base):
     prompt: str
     model: Optional[str] = None
     thinking: Optional[Union[str, int]] = None
+    # Optional per-task override of the lead recursion_limit (LangGraph super-steps). None -> use the
+    # agent profile's recursion_limit. Fan-out coordinators set this high as a backstop.
+    recursion_limit: Optional[int] = None
 
 
 class StepDef(_Base):

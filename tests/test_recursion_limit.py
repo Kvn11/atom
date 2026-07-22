@@ -46,3 +46,44 @@ def test_subagent_child_config_uses_its_recursion_limit():
     conf = runner._child_config("cid")
     assert conf["recursion_limit"] == 321
     assert conf["configurable"]["thread_id"] == "cid"
+
+
+import pytest
+from langchain_core.messages import AIMessage
+
+from tests.conftest import make_prepared
+
+
+def _spy_build_run_config(monkeypatch, seen):
+    from atom import runtime
+    real = runtime.build_run_config
+
+    def spy(thread_id, recursion_limit, trace=None, obs_provider=None):
+        seen["limit"] = recursion_limit
+        return real(thread_id, recursion_limit, trace, obs_provider)
+
+    monkeypatch.setattr(runtime, "build_run_config", spy)
+
+
+@pytest.mark.asyncio
+async def test_run_agent_honors_override_recursion_limit(base_config, monkeypatch):
+    from atom import runtime
+
+    seen: dict = {}
+    _spy_build_run_config(monkeypatch, seen)
+    prepared = make_prepared([AIMessage(content="ok")])
+    await runtime.run_agent(
+        "hi", config=base_config, prepared=prepared, override_recursion_limit=777
+    )
+    assert seen["limit"] == 777
+
+
+@pytest.mark.asyncio
+async def test_run_agent_defaults_to_profile_recursion_limit(base_config, monkeypatch):
+    from atom import runtime
+
+    seen: dict = {}
+    _spy_build_run_config(monkeypatch, seen)
+    prepared = make_prepared([AIMessage(content="ok")])
+    await runtime.run_agent("hi", config=base_config, prepared=prepared)
+    assert seen["limit"] == base_config.profile("default").recursion_limit

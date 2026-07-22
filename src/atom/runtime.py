@@ -93,6 +93,7 @@ async def run_agent(
     user_id: str | None = None,
     override_model: str | None = None,
     override_thinking: str | int | None = None,
+    override_recursion_limit: int | None = None,
     override_system_prompt: str | None = None,
     trace: dict | None = None,
     prepared: PreparedModel | None = None,
@@ -145,7 +146,11 @@ async def run_agent(
             override_system_prompt=override_system_prompt, trace=trace, notes=notes,
             obs_provider=obs_provider,
         )
-        run_config = build_run_config(thread_id, prof.recursion_limit, trace, obs_provider)
+        limit = (
+            override_recursion_limit if override_recursion_limit is not None
+            else prof.recursion_limit
+        )
+        run_config = build_run_config(thread_id, limit, trace, obs_provider)
         inp = {"messages": [HumanMessage(content=content)]}
         try:
             if on_event is not None and cfg.streaming.enabled:
