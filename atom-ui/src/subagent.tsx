@@ -37,18 +37,23 @@ export function subStatus(result: SubResult | undefined, streaming: boolean): Su
 }
 
 // One-line summary: the failure reason (sentinel stripped) or the report's first line.
-export function subSummary(status: SubStatus, report: string | undefined): string {
+// `description` is the sub-agent's description arg — the failure sentinel is
+// `[sub-agent '<description>' <reason>]`, so stripping that exact prefix/suffix
+// recovers the reason even when the description itself contains an apostrophe.
+export function subSummary(status: SubStatus, report: string | undefined, description = ""): string {
   if (!report) return "";
   if (status === "failed") {
-    const m = report.match(/^\[sub-agent '.*?' (.*)\]\s*$/s);
-    return m ? m[1] : firstLine(report, 80);
+    const prefix = `[sub-agent '${description}' `;
+    if (report.startsWith(prefix) && report.endsWith("]"))
+      return report.slice(prefix.length, -1).trim();
+    return firstLine(report, 80);
   }
   if (status === "done") return firstLine(report, 80) || "reported";
   return "";
 }
 
 function firstLine(s: string, n: number): string {
-  const line = s.split("\n").find((l) => l.trim()) ?? "";
+  const line = (s.split("\n").find((l) => l.trim()) ?? "").trim();
   return line.length > n ? line.slice(0, n - 1) + "…" : line;
 }
 
@@ -63,7 +68,7 @@ export function SubAgentCard(
   const [open, setOpen] = useState(false);
   const status = subStatus(result, streaming);
   const report = result?.text;
-  const summary = subSummary(status, report);
+  const summary = subSummary(status, report, description);
   return (
     <div className={`subagent-card ${status}`}>
       <div className="sa-head">
