@@ -148,6 +148,22 @@ def _coerce_thinking(thinking: Any) -> Any:
     return thinking
 
 
+def _anthropic_thinking(spec: ModelSpec, thinking: Any, off: bool) -> dict[str, Any]:
+    """Anthropic-style thinking kwargs, shared by direct-Anthropic and Bedrock-Anthropic-wire.
+
+    ``adaptive`` is Opus-only; detected by substring so Bedrock ids (``us.anthropic.claude-opus-4-8``)
+    match as well as the bare direct-Anthropic ids (``claude-opus-4-8``).
+    """
+    if off:
+        return {}
+    if thinking == "adaptive":
+        if "claude-opus" in spec.model_name:
+            return {"thinking": {"type": "adaptive"}}
+        return {"thinking": {"type": "enabled", "budget_tokens": _EFFORT_BUDGETS["medium"]}}
+    budget = thinking if isinstance(thinking, int) else _EFFORT_BUDGETS.get(thinking, _EFFORT_BUDGETS["medium"])
+    return {"thinking": {"type": "enabled", "budget_tokens": budget}}
+
+
 def _thinking_overrides(spec: ModelSpec, thinking: Any) -> dict[str, Any]:
     """Translate a generic ``thinking`` setting into provider-specific kwargs.
 
@@ -162,15 +178,7 @@ def _thinking_overrides(spec: ModelSpec, thinking: Any) -> dict[str, Any]:
     off = thinking == "off" or thinking is False
 
     if spec.provider == "anthropic":
-        if off:
-            return {}
-        if thinking == "adaptive":
-            if spec.model_name.startswith("claude-opus"):
-                return {"thinking": {"type": "adaptive"}}
-            # adaptive is Opus-only; downgrade rather than send an unsupported block.
-            return {"thinking": {"type": "enabled", "budget_tokens": _EFFORT_BUDGETS["medium"]}}
-        budget = thinking if isinstance(thinking, int) else _EFFORT_BUDGETS.get(thinking, _EFFORT_BUDGETS["medium"])
-        return {"thinking": {"type": "enabled", "budget_tokens": budget}}
+        return _anthropic_thinking(spec, thinking, off)
 
     if spec.provider == "openai":
         if off:
@@ -207,6 +215,15 @@ def _thinking_overrides(spec: ModelSpec, thinking: Any) -> dict[str, Any]:
         if budget is not None:
             out["thinking_budget"] = budget
         return out
+
+    if spec.provider == "bedrock":
+        if spec.wire == "anthropic":
+            return _anthropic_thinking(spec, thinking, off)
+        # openai-wire: Bifrost maps OpenAI-style reasoning -> Bedrock thinkingConfig (best-effort).
+        if off or not spec.supports_reasoning:
+            return {}
+        budget = thinking if isinstance(thinking, int) else _EFFORT_BUDGETS.get(thinking, _EFFORT_BUDGETS["medium"])
+        return {"extra_body": {"reasoning": {"max_tokens": max(budget, 1024)}}}
     return {}
 
 

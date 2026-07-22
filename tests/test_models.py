@@ -145,3 +145,31 @@ def test_bedrock_registry_entries_present_and_typed():
         assert s.provider == "bedrock"
         assert s.wire in ("anthropic", "openai")
         assert s.base_url is None          # gateway root is env-sourced, not baked in
+
+
+def test_bedrock_anthropic_wire_reuses_anthropic_thinking():
+    spec = resolve_spec("bedrock-opus")  # bedrock id: us.anthropic.claude-opus-4-8
+    # adaptive must be recognized despite the "us.anthropic." prefix (substring match, not startswith)
+    assert _thinking_overrides(spec, "adaptive") == {"thinking": {"type": "adaptive"}}
+    assert _thinking_overrides(spec, 8192) == {"thinking": {"type": "enabled", "budget_tokens": 8192}}
+    assert _thinking_overrides(spec, "off") == {}
+
+
+def test_bedrock_openai_wire_reasoning_passthrough():
+    spec = resolve_spec("bedrock-kimi-thinking")  # supports_reasoning=True, wire=openai
+    assert _thinking_overrides(spec, "high") == {"extra_body": {"reasoning": {"max_tokens": 24576}}}
+    assert _thinking_overrides(spec, 500) == {"extra_body": {"reasoning": {"max_tokens": 1024}}}  # floored
+    assert _thinking_overrides(spec, "off") == {}
+
+
+def test_bedrock_openai_wire_no_reasoning_for_nonreasoning_model():
+    spec = resolve_spec("bedrock-qwen-coder")  # supports_reasoning=False
+    assert _thinking_overrides(spec, "high") == {}
+
+
+def test_direct_anthropic_thinking_unchanged_after_refactor():
+    # Regression: the existing direct-Anthropic behavior must be identical after extracting the helper.
+    assert _thinking_overrides(resolve_spec("opus"), "adaptive") == {"thinking": {"type": "adaptive"}}
+    assert _thinking_overrides(resolve_spec("haiku"), 16000) == {
+        "thinking": {"type": "enabled", "budget_tokens": 16000}}
+    assert _thinking_overrides(resolve_spec("haiku"), "adaptive")["thinking"]["type"] == "enabled"
