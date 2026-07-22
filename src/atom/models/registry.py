@@ -15,7 +15,7 @@ from typing import Any, Literal
 
 from langchain_core.language_models import BaseChatModel
 
-Provider = Literal["anthropic", "openai", "google_genai", "qwen"]
+Provider = Literal["anthropic", "openai", "google_genai", "qwen", "bedrock"]
 
 DASHSCOPE_INTL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
 _DEFAULT_WINDOW = 128_000  # last-resort fallback for unknown "provider:model" strings
@@ -34,6 +34,7 @@ class ModelSpec:
     supports_reasoning: bool
     api_key_env: str
     base_url: str | None = None
+    wire: Literal["anthropic", "openai"] | None = None  # bedrock-only: Bifrost endpoint + client class
 
 
 REGISTRY: dict[str, ModelSpec] = {
@@ -65,6 +66,29 @@ REGISTRY: dict[str, ModelSpec] = {
                           "DASHSCOPE_API_KEY", base_url=DASHSCOPE_INTL),
     "qwen-plus": ModelSpec("qwen-plus", "qwen", "qwen-plus", None, 1_000_000, 32_768, False, True,
                            "DASHSCOPE_API_KEY", base_url=DASHSCOPE_INTL),
+    # --- AWS Bedrock via the Bifrost gateway ---
+    # base URL + key come from env (ATOM_BIFROST_BASE_URL / ATOM_BIFROST_API_KEY); wire selects the
+    # Bifrost drop-in endpoint + LangChain class; model_name is the bare bedrock-runtime id (the
+    # "bedrock/" routing prefix is added in build_model). init_str=None -> custom factory branch.
+    "bedrock-opus": ModelSpec("bedrock-opus", "bedrock", "us.anthropic.claude-opus-4-8", None,
+                              1_000_000, 128_000, True, True, "ATOM_BIFROST_API_KEY", wire="anthropic"),
+    "bedrock-sonnet": ModelSpec("bedrock-sonnet", "bedrock", "us.anthropic.claude-sonnet-5", None,
+                                1_000_000, 128_000, True, True, "ATOM_BIFROST_API_KEY", wire="anthropic"),
+    "bedrock-haiku": ModelSpec("bedrock-haiku", "bedrock",
+                               "anthropic.claude-haiku-4-5-20251001-v1:0", None,
+                               200_000, 64_000, True, True, "ATOM_BIFROST_API_KEY", wire="anthropic"),
+    "bedrock-qwen-coder": ModelSpec("bedrock-qwen-coder", "bedrock",
+                                    "qwen.qwen3-coder-480b-a35b-v1:0", None,
+                                    131_072, 16_384, False, False, "ATOM_BIFROST_API_KEY", wire="openai"),
+    "bedrock-qwen": ModelSpec("bedrock-qwen", "bedrock", "qwen.qwen3-235b-a22b-2507-v1:0", None,
+                              262_144, 8_192, False, True, "ATOM_BIFROST_API_KEY", wire="openai"),
+    "bedrock-kimi-thinking": ModelSpec("bedrock-kimi-thinking", "bedrock",
+                                       "moonshot.kimi-k2-thinking", None,
+                                       262_144, 16_384, False, True, "ATOM_BIFROST_API_KEY", wire="openai"),
+    "bedrock-kimi": ModelSpec("bedrock-kimi", "bedrock", "moonshotai.kimi-k2.5", None,
+                              262_144, 16_384, True, False, "ATOM_BIFROST_API_KEY", wire="openai"),
+    "bedrock-gpt-oss": ModelSpec("bedrock-gpt-oss", "bedrock", "openai.gpt-oss-120b-1:0", None,
+                                 131_072, 16_384, False, True, "ATOM_BIFROST_API_KEY", wire="openai"),
 }
 
 

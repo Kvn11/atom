@@ -121,3 +121,27 @@ def test_build_model_respects_explicit_overrides(monkeypatch):
     )
     build_model("haiku", thinking="off", max_retries=3, timeout=42.0)
     assert calls["init"]["max_retries"] == 3 and calls["init"]["timeout"] == 42.0
+
+
+def test_bedrock_registry_entries_present_and_typed():
+    opus = resolve_spec("bedrock-opus")
+    assert opus.provider == "bedrock"
+    assert opus.wire == "anthropic"
+    assert opus.model_name == "us.anthropic.claude-opus-4-8"
+    assert opus.init_str is None          # custom-factory path, not init_chat_model
+    assert opus.context_window == 1_000_000
+    assert opus.max_output_tokens == 128_000
+
+    coder = resolve_spec("bedrock-qwen-coder")
+    assert coder.wire == "openai"
+    assert coder.supports_reasoning is False
+    assert coder.model_name == "qwen.qwen3-coder-480b-a35b-v1:0"
+
+    # All eight bedrock-* keys exist and are the bedrock provider with a wire set.
+    keys = ["bedrock-opus", "bedrock-sonnet", "bedrock-haiku", "bedrock-qwen-coder",
+            "bedrock-qwen", "bedrock-kimi-thinking", "bedrock-kimi", "bedrock-gpt-oss"]
+    for k in keys:
+        s = resolve_spec(k)
+        assert s.provider == "bedrock"
+        assert s.wire in ("anthropic", "openai")
+        assert s.base_url is None          # gateway root is env-sourced, not baked in
