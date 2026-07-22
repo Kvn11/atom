@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from atom.models.registry import _thinking_overrides, build_model, clamp_concurrency, resolve_spec
 
 
@@ -121,3 +123,127 @@ def test_build_model_respects_explicit_overrides(monkeypatch):
     )
     build_model("haiku", thinking="off", max_retries=3, timeout=42.0)
     assert calls["init"]["max_retries"] == 3 and calls["init"]["timeout"] == 42.0
+
+
+def test_bedrock_registry_entries_present_and_typed():
+    opus = resolve_spec("bedrock-opus")
+    assert opus.provider == "bedrock"
+    assert opus.wire == "anthropic"
+    assert opus.model_name == "us.anthropic.claude-opus-4-8"
+    assert opus.init_str is None          # custom-factory path, not init_chat_model
+    assert opus.context_window == 1_000_000
+    assert opus.max_output_tokens == 128_000
+
+    coder = resolve_spec("bedrock-qwen-coder")
+    assert coder.wire == "openai"
+    assert coder.supports_reasoning is False
+    assert coder.model_name == "qwen.qwen3-coder-480b-a35b-v1:0"
+
+    # All eight bedrock-* keys exist and are the bedrock provider with a wire set.
+    keys = ["bedrock-opus", "bedrock-sonnet", "bedrock-haiku", "bedrock-qwen-coder",
+            "bedrock-qwen", "bedrock-kimi-thinking", "bedrock-kimi", "bedrock-gpt-oss"]
+    for k in keys:
+        s = resolve_spec(k)
+        assert s.provider == "bedrock"
+        assert s.wire in ("anthropic", "openai")
+        assert s.base_url is None          # gateway root is env-sourced, not baked in
+
+
+def test_bedrock_anthropic_wire_reuses_anthropic_thinking():
+    spec = resolve_spec("bedrock-opus")  # bedrock id: us.anthropic.claude-opus-4-8
+    # adaptive must be recognized despite the "us.anthropic." prefix (substring match, not startswith)
+    assert _thinking_overrides(spec, "adaptive") == {"thinking": {"type": "adaptive"}}
+    # Opus on Bedrock is adaptive-only; an int budget degrades to adaptive (see
+    # test_bedrock_opus_forces_adaptive for the full guard coverage).
+    assert _thinking_overrides(spec, 8192) == {"thinking": {"type": "adaptive"}}
+    assert _thinking_overrides(spec, "off") == {}
+
+
+def test_bedrock_opus_forces_adaptive():
+    # Claude Opus 4.7/4.8 on Bedrock is adaptive-only: an enabled+budget thinking block
+    # returns HTTP 400. Any positive budget/effort request must degrade to adaptive.
+    spec = resolve_spec("bedrock-opus")
+    assert _thinking_overrides(spec, 8192) == {"thinking": {"type": "adaptive"}}
+    assert _thinking_overrides(spec, "high") == {"thinking": {"type": "adaptive"}}
+    assert _thinking_overrides(spec, "adaptive") == {"thinking": {"type": "adaptive"}}
+    assert _thinking_overrides(spec, "off") == {}
+
+    # Sonnet/non-Opus on Bedrock is unaffected by the guard.
+    sonnet = resolve_spec("bedrock-sonnet")
+    assert _thinking_overrides(sonnet, 8192) == {"thinking": {"type": "enabled", "budget_tokens": 8192}}
+
+    # The guard must not leak into the direct-Anthropic provider path.
+    assert _thinking_overrides(resolve_spec("opus"), 8192) == {
+        "thinking": {"type": "enabled", "budget_tokens": 8192}}
+
+
+def test_bedrock_openai_wire_reasoning_passthrough():
+    spec = resolve_spec("bedrock-kimi-thinking")  # supports_reasoning=True, wire=openai
+    assert _thinking_overrides(spec, "high") == {"extra_body": {"reasoning": {"max_tokens": 24576}}}
+    assert _thinking_overrides(spec, 500) == {"extra_body": {"reasoning": {"max_tokens": 1024}}}  # floored
+    assert _thinking_overrides(spec, "off") == {}
+
+
+def test_bedrock_openai_wire_no_reasoning_for_nonreasoning_model():
+    spec = resolve_spec("bedrock-qwen-coder")  # supports_reasoning=False
+    assert _thinking_overrides(spec, "high") == {}
+
+
+def test_direct_anthropic_thinking_unchanged_after_refactor():
+    # Regression: the existing direct-Anthropic behavior must be identical after extracting the helper.
+    assert _thinking_overrides(resolve_spec("opus"), "adaptive") == {"thinking": {"type": "adaptive"}}
+    assert _thinking_overrides(resolve_spec("haiku"), 16000) == {
+        "thinking": {"type": "enabled", "budget_tokens": 16000}}
+    assert _thinking_overrides(resolve_spec("haiku"), "adaptive")["thinking"]["type"] == "enabled"
+
+
+def test_build_model_bedrock_anthropic_wire(monkeypatch):
+    captured: dict = {}
+
+    class FakeChatAnthropic:
+        def __init__(self, **kw):
+            captured.update(kw)
+            captured["_cls"] = "anthropic"
+
+    import langchain_anthropic
+    monkeypatch.setattr(langchain_anthropic, "ChatAnthropic", FakeChatAnthropic)
+    monkeypatch.setenv("ATOM_BIFROST_BASE_URL", "https://bifrost.example.com/")  # trailing slash
+    monkeypatch.setenv("ATOM_BIFROST_API_KEY", "vk_test")
+
+    build_model("bedrock-opus", thinking="adaptive")
+    assert captured["_cls"] == "anthropic"
+    assert captured["base_url"] == "https://bifrost.example.com/anthropic"  # slash normalized, suffix added
+    assert captured["model"] == "bedrock/us.anthropic.claude-opus-4-8"
+    assert captured["default_headers"] == {"x-bf-vk": "vk_test"}
+    assert captured["api_key"] == "vk_test"
+    assert captured["thinking"] == {"type": "adaptive"}
+    assert captured["max_retries"] == 1
+    assert captured["timeout"] == 120.0
+
+
+def test_build_model_bedrock_openai_wire(monkeypatch):
+    captured: dict = {}
+
+    class FakeChatOpenAI:
+        def __init__(self, **kw):
+            captured.update(kw)
+            captured["_cls"] = "openai"
+
+    import langchain_openai
+    monkeypatch.setattr(langchain_openai, "ChatOpenAI", FakeChatOpenAI)
+    monkeypatch.setenv("ATOM_BIFROST_BASE_URL", "https://bifrost.example.com")
+    monkeypatch.setenv("ATOM_BIFROST_API_KEY", "vk_test")
+
+    build_model("bedrock-kimi-thinking", thinking="high")
+    assert captured["_cls"] == "openai"
+    assert captured["base_url"] == "https://bifrost.example.com/openai"
+    assert captured["model"] == "bedrock/moonshot.kimi-k2-thinking"
+    assert captured["default_headers"] == {"x-bf-vk": "vk_test"}
+    assert captured["extra_body"] == {"reasoning": {"max_tokens": 24576}}
+
+
+def test_build_model_bedrock_missing_env_raises(monkeypatch):
+    monkeypatch.delenv("ATOM_BIFROST_BASE_URL", raising=False)
+    monkeypatch.delenv("ATOM_BIFROST_API_KEY", raising=False)
+    with pytest.raises(RuntimeError, match="ATOM_BIFROST_BASE_URL and ATOM_BIFROST_API_KEY"):
+        build_model("bedrock-haiku")

@@ -1,8 +1,10 @@
-"""Model registry + factory across Anthropic, OpenAI, Gemini, and Alibaba Qwen.
+"""Model registry + factory across Anthropic, OpenAI, Gemini, Alibaba Qwen, and AWS Bedrock.
 
 ``init_chat_model`` natively covers anthropic/openai/google_genai; Qwen (DashScope) is not a
-recognized provider, so it is built directly via ``langchain_qwq.ChatQwen``. Context window and
-capability flags come from the live ``model.profile`` at runtime (see
+recognized provider, so it is built directly via ``langchain_qwq.ChatQwen``. Bedrock models route
+through a Bifrost gateway (see :func:`_build_bedrock`) and are built directly as well, since
+``init_chat_model`` would otherwise dispatch to LangChain's native boto3/SigV4 Bedrock path.
+Context window and capability flags come from the live ``model.profile`` at runtime (see
 :mod:`atom.models.profiles`); the static fields here are fallbacks for when a profile is missing
 (notably Qwen / brand-new models).
 """
@@ -15,7 +17,7 @@ from typing import Any, Literal
 
 from langchain_core.language_models import BaseChatModel
 
-Provider = Literal["anthropic", "openai", "google_genai", "qwen"]
+Provider = Literal["anthropic", "openai", "google_genai", "qwen", "bedrock"]
 
 DASHSCOPE_INTL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
 _DEFAULT_WINDOW = 128_000  # last-resort fallback for unknown "provider:model" strings
@@ -34,6 +36,7 @@ class ModelSpec:
     supports_reasoning: bool
     api_key_env: str
     base_url: str | None = None
+    wire: Literal["anthropic", "openai"] | None = None  # bedrock-only: Bifrost endpoint + client class
 
 
 REGISTRY: dict[str, ModelSpec] = {
@@ -65,6 +68,29 @@ REGISTRY: dict[str, ModelSpec] = {
                           "DASHSCOPE_API_KEY", base_url=DASHSCOPE_INTL),
     "qwen-plus": ModelSpec("qwen-plus", "qwen", "qwen-plus", None, 1_000_000, 32_768, False, True,
                            "DASHSCOPE_API_KEY", base_url=DASHSCOPE_INTL),
+    # --- AWS Bedrock via the Bifrost gateway ---
+    # base URL + key come from env (ATOM_BIFROST_BASE_URL / ATOM_BIFROST_API_KEY); wire selects the
+    # Bifrost drop-in endpoint + LangChain class; model_name is the bare bedrock-runtime id (the
+    # "bedrock/" routing prefix is added in build_model). init_str=None -> custom factory branch.
+    "bedrock-opus": ModelSpec("bedrock-opus", "bedrock", "us.anthropic.claude-opus-4-8", None,
+                              1_000_000, 128_000, True, True, "ATOM_BIFROST_API_KEY", wire="anthropic"),
+    "bedrock-sonnet": ModelSpec("bedrock-sonnet", "bedrock", "us.anthropic.claude-sonnet-5", None,
+                                1_000_000, 128_000, True, True, "ATOM_BIFROST_API_KEY", wire="anthropic"),
+    "bedrock-haiku": ModelSpec("bedrock-haiku", "bedrock",
+                               "anthropic.claude-haiku-4-5-20251001-v1:0", None,
+                               200_000, 64_000, True, True, "ATOM_BIFROST_API_KEY", wire="anthropic"),
+    "bedrock-qwen-coder": ModelSpec("bedrock-qwen-coder", "bedrock",
+                                    "qwen.qwen3-coder-480b-a35b-v1:0", None,
+                                    131_072, 16_384, False, False, "ATOM_BIFROST_API_KEY", wire="openai"),
+    "bedrock-qwen": ModelSpec("bedrock-qwen", "bedrock", "qwen.qwen3-235b-a22b-2507-v1:0", None,
+                              262_144, 8_192, False, True, "ATOM_BIFROST_API_KEY", wire="openai"),
+    "bedrock-kimi-thinking": ModelSpec("bedrock-kimi-thinking", "bedrock",
+                                       "moonshot.kimi-k2-thinking", None,
+                                       262_144, 16_384, False, True, "ATOM_BIFROST_API_KEY", wire="openai"),
+    "bedrock-kimi": ModelSpec("bedrock-kimi", "bedrock", "moonshotai.kimi-k2.5", None,
+                              262_144, 16_384, True, False, "ATOM_BIFROST_API_KEY", wire="openai"),
+    "bedrock-gpt-oss": ModelSpec("bedrock-gpt-oss", "bedrock", "openai.gpt-oss-120b-1:0", None,
+                                 131_072, 16_384, False, True, "ATOM_BIFROST_API_KEY", wire="openai"),
 }
 
 
@@ -124,13 +150,29 @@ def _coerce_thinking(thinking: Any) -> Any:
     return thinking
 
 
+def _anthropic_thinking(spec: ModelSpec, thinking: Any, off: bool) -> dict[str, Any]:
+    """Anthropic-style thinking kwargs, shared by direct-Anthropic and Bedrock-Anthropic-wire.
+
+    ``adaptive`` is Opus-only; detected by substring so Bedrock ids (``us.anthropic.claude-opus-4-8``)
+    match as well as the bare direct-Anthropic ids (``claude-opus-4-8``).
+    """
+    if off:
+        return {}
+    if thinking == "adaptive":
+        if "claude-opus" in spec.model_name:
+            return {"thinking": {"type": "adaptive"}}
+        return {"thinking": {"type": "enabled", "budget_tokens": _EFFORT_BUDGETS["medium"]}}
+    budget = thinking if isinstance(thinking, int) else _EFFORT_BUDGETS.get(thinking, _EFFORT_BUDGETS["medium"])
+    return {"thinking": {"type": "enabled", "budget_tokens": budget}}
+
+
 def _thinking_overrides(spec: ModelSpec, thinking: Any) -> dict[str, Any]:
     """Translate a generic ``thinking`` setting into provider-specific kwargs.
 
     Accepts: None (provider default), "off"/False, "adaptive", an effort str
     ("minimal"/"low"/"medium"/"high"), or an int token budget (or its string form).
-    All four providers honor int budgets and effort strings; ``adaptive`` is Anthropic-Opus-only
-    and is downgraded to an enabled budget elsewhere.
+    All providers with a thinking branch honor int budgets and effort strings; ``adaptive`` is
+    Anthropic-Opus-only and is downgraded to an enabled budget elsewhere.
     """
     if thinking is None:
         return {}
@@ -138,15 +180,7 @@ def _thinking_overrides(spec: ModelSpec, thinking: Any) -> dict[str, Any]:
     off = thinking == "off" or thinking is False
 
     if spec.provider == "anthropic":
-        if off:
-            return {}
-        if thinking == "adaptive":
-            if spec.model_name.startswith("claude-opus"):
-                return {"thinking": {"type": "adaptive"}}
-            # adaptive is Opus-only; downgrade rather than send an unsupported block.
-            return {"thinking": {"type": "enabled", "budget_tokens": _EFFORT_BUDGETS["medium"]}}
-        budget = thinking if isinstance(thinking, int) else _EFFORT_BUDGETS.get(thinking, _EFFORT_BUDGETS["medium"])
-        return {"thinking": {"type": "enabled", "budget_tokens": budget}}
+        return _anthropic_thinking(spec, thinking, off)
 
     if spec.provider == "openai":
         if off:
@@ -183,6 +217,19 @@ def _thinking_overrides(spec: ModelSpec, thinking: Any) -> dict[str, Any]:
         if budget is not None:
             out["thinking_budget"] = budget
         return out
+
+    if spec.provider == "bedrock":
+        if spec.wire == "anthropic":
+            # Opus on Bedrock (4.7/4.8) is adaptive-only: an enabled+budget block returns HTTP 400.
+            # Degrade any positive budget/effort request to adaptive for Opus.
+            if not off and thinking is not None and "claude-opus" in spec.model_name:
+                thinking = "adaptive"
+            return _anthropic_thinking(spec, thinking, off)
+        # openai-wire: Bifrost maps OpenAI-style reasoning -> Bedrock thinkingConfig (best-effort).
+        if off or not spec.supports_reasoning:
+            return {}
+        budget = thinking if isinstance(thinking, int) else _EFFORT_BUDGETS.get(thinking, _EFFORT_BUDGETS["medium"])
+        return {"extra_body": {"reasoning": {"max_tokens": max(budget, 1024)}}}
     return {}
 
 
@@ -201,8 +248,45 @@ def build_model(key: str, *, thinking: Any = None, **overrides: Any) -> BaseChat
         from langchain.chat_models import init_chat_model
 
         return init_chat_model(spec.init_str, **kwargs)
+    if spec.provider == "bedrock":
+        return _build_bedrock(spec, kwargs)
     # Qwen: init_chat_model has no dashscope provider.
     from langchain_qwq import ChatQwen
 
     kwargs.setdefault("api_base", spec.base_url)
     return ChatQwen(model=spec.model_name, **kwargs)
+
+
+def _build_bedrock(spec: ModelSpec, kwargs: dict[str, Any]) -> BaseChatModel:
+    """Construct a Bedrock model routed through the Bifrost gateway.
+
+    Base URL (gateway root) and the Bifrost virtual key come from env. The key is carried in the
+    ``x-bf-vk`` header (authoritative for Bifrost) and also as ``api_key``. The model is sent as
+    ``bedrock/<runtime id>``; ``wire`` picks the drop-in endpoint suffix and the LangChain class.
+    We construct the client classes directly (never ``init_chat_model``), which would otherwise
+    dispatch to LangChain's native boto3/SigV4 Bedrock path and bypass the gateway.
+    """
+    import os
+
+    root = os.environ.get("ATOM_BIFROST_BASE_URL")
+    api_key = os.environ.get("ATOM_BIFROST_API_KEY")
+    if not root or not api_key:
+        raise RuntimeError(
+            f"Model '{spec.key}' requires ATOM_BIFROST_BASE_URL and ATOM_BIFROST_API_KEY to be set."
+        )
+    root = root.rstrip("/")
+    common: dict[str, Any] = dict(
+        model=f"bedrock/{spec.model_name}",
+        api_key=api_key,
+        default_headers={"x-bf-vk": api_key},
+        **kwargs,  # includes thinking/extra_body + max_retries/timeout
+    )
+    if spec.wire == "anthropic":
+        from langchain_anthropic import ChatAnthropic
+
+        return ChatAnthropic(base_url=f"{root}/anthropic", **common)
+    if spec.wire == "openai":
+        from langchain_openai import ChatOpenAI
+
+        return ChatOpenAI(base_url=f"{root}/openai", **common)
+    raise RuntimeError(f"Bedrock model '{spec.key}' has an invalid wire: {spec.wire!r}")

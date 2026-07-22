@@ -49,8 +49,8 @@ async def test_existing_workspace_binds_external_dir(atom_home, tmp_path):
     assert (ext / "out.txt").read_text() == "NEW"              # wrote into the external dir
 
 
-def test_registry_covers_all_four_providers():
-    assert {s.provider for s in REGISTRY.values()} == {"anthropic", "openai", "google_genai", "qwen"}
+def test_registry_covers_all_five_providers():
+    assert {s.provider for s in REGISTRY.values()} == {"anthropic", "openai", "google_genai", "qwen", "bedrock"}
 
 
 def test_resolve_spec_key_and_raw_and_unknown():
