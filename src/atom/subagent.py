@@ -174,8 +174,8 @@ class SubagentRunner:
 
     async def run(
         self, parent_thread_id: str, description: str, prompt: str, subagent_type: SubagentType
-    ) -> tuple[str, dict[str, int]]:
-        """Run a child agent; return ``(report_text, usage_delta)``."""
+    ) -> tuple[str, dict[str, int], bool]:
+        """Run a child agent; return ``(report_text, usage_delta, failed)``."""
         async with self._sem:
             system_text = self._child_system(subagent_type)
             agent = self._child_agent(subagent_type, system=system_text)
@@ -214,9 +214,9 @@ class SubagentRunner:
                     timeout=self.timeout_seconds,
                 )
             except asyncio.TimeoutError:
-                return f"[sub-agent '{description}' timed out after {self.timeout_seconds}s]", {}
+                return f"[sub-agent '{description}' timed out after {self.timeout_seconds}s]", {}, True
             except Exception as exc:  # noqa: BLE001
-                return f"[sub-agent '{description}' failed: {type(exc).__name__}: {exc}]", {}
+                return f"[sub-agent '{description}' failed: {type(exc).__name__}: {exc}]", {}, True
             from atom.messages import message_text
 
             messages = result.get("messages", [])
@@ -225,8 +225,8 @@ class SubagentRunner:
                 if isinstance(msg, AIMessage):
                     text = message_text(msg)
                     if text.strip():
-                        return text, usage
-            return "[sub-agent produced no output]", usage
+                        return text, usage, False
+            return "[sub-agent produced no output]", usage, False
 
 
 # ------------------------------------------------------------------ registry

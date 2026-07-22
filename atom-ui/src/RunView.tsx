@@ -5,6 +5,7 @@ import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import { api, artifactUrl, exportDownloadUrl, Artifact, ChatMsg, Manifest, StreamBlock, Todo } from "./api";
 import { currentPlan } from "./plan";
+import { SubAgentCard, pairBlocks, pairChat } from "./subagent";
 import { Dot, StatusPill, elapsed, fmtSize } from "./ui";
 
 const IMG = /\.(png|jpe?g|gif|webp|svg|bmp|avif|apng|jfif|ico)$/i;
@@ -385,6 +386,8 @@ function Transcript(
     [arts, sel],
   );
   const plan = currentPlan(blocks, chat, streaming);
+  const livePair = useMemo(() => pairBlocks(blocks), [blocks]);
+  const chatPair = useMemo(() => pairChat(chat), [chat]);
   const rail = plan.length ? (
     <div className="transcript-rail">
       <PlanPanel todos={plan} />
@@ -414,6 +417,13 @@ function Transcript(
           <div className="transcript">
             {blocks.map((b, i) => {
               const isLast = i === blocks.length - 1;
+              if (b.kind === "tool_call" && b.name === "delegate_task" && b.id)
+                return <SubAgentCard key={i}
+                  description={String(b.args?.description ?? "sub-agent")}
+                  subagentType={String(b.args?.subagent_type ?? "general-purpose")}
+                  result={livePair.resultByCallId.get(b.id)} streaming={streaming} />;
+              if (b.kind === "tool_result" && b.toolCallId && livePair.delegateIds.has(b.toolCallId))
+                return null;   // folded into its card
               if (b.kind === "thinking")
                 return <div key={i} className="msg thinking"><div className="msg-role">thinking</div>
                   <div className="msg-text think">{b.text}{isLast && <span className="caret" />}</div></div>;
@@ -445,24 +455,35 @@ function Transcript(
     <div className="transcript-split">
       <div className="transcript-main">
         <div className="transcript">
-          {chat.map((m, i) => m.tool_calls?.length ? (
-            <div key={i} className="msg tool-calls">
-              {m.text && <div className="msg-text md"><Markdown>{m.text}</Markdown></div>}
-              {m.tool_calls.map((c, k) => (
-                <div key={k} className={`toolcall${c.name === "present_files" ? " present" : ""}`}>
-                  <span className="tc-name">{c.name === "present_files" ? "⇪ present_files" : `→ ${c.name}`}</span>
-                  <span className="tc-args">{argSummary(c.args)}</span>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div key={i} className={`msg ${m.role}`}>
-              <div className="msg-role">{m.name || m.role}</div>
-              {m.role === "ai"
-                ? <div className="msg-text md"><Markdown>{m.text}</Markdown></div>
-                : <div className="msg-text">{m.text}</div>}
-            </div>
-          ))}
+          {chat.map((m, i) => {
+            if (m.tool_call_id && chatPair.delegateIds.has(m.tool_call_id)) return null;  // folded into its card
+            if (m.tool_calls?.length) return (
+              <div key={i} className="msg tool-calls">
+                {m.text && <div className="msg-text md"><Markdown>{m.text}</Markdown></div>}
+                {m.tool_calls.map((c, k) =>
+                  c.name === "delegate_task" && c.id ? (
+                    <SubAgentCard key={k}
+                      description={String(c.args?.description ?? "sub-agent")}
+                      subagentType={String(c.args?.subagent_type ?? "general-purpose")}
+                      result={chatPair.resultByCallId.get(c.id)} streaming={false} />
+                  ) : (
+                    <div key={k} className={`toolcall${c.name === "present_files" ? " present" : ""}`}>
+                      <span className="tc-name">{c.name === "present_files" ? "⇪ present_files" : `→ ${c.name}`}</span>
+                      <span className="tc-args">{argSummary(c.args)}</span>
+                    </div>
+                  )
+                )}
+              </div>
+            );
+            return (
+              <div key={i} className={`msg ${m.role}`}>
+                <div className="msg-role">{m.name || m.role}</div>
+                {m.role === "ai"
+                  ? <div className="msg-text md"><Markdown>{m.text}</Markdown></div>
+                  : <div className="msg-text">{m.text}</div>}
+              </div>
+            );
+          })}
         </div>
         <FilesTray files={presented} onOpen={onOpenModal} />
       </div>
@@ -747,7 +768,7 @@ function useTaskStream(runId: string, sel: Sel | null, taskStatus: string | unde
         b.type === "thinking_delta" ? { kind: "thinking", text: b.text }
         : b.type === "text_delta" ? { kind: "text", text: b.text }
         : b.type === "tool_call" ? { kind: "tool_call", id: b.id, name: b.name, args: b.args }
-        : { kind: "tool_result", name: b.name, text: b.text, isError: b.is_error });
+        : { kind: "tool_result", toolCallId: b.tool_call_id, name: b.name, text: b.text, isError: b.is_error });
       setBlocks(mapped);
     });
     es.addEventListener("thinking_delta", (e) => { setLastEventAt(Date.now()); appendText("thinking", JSON.parse((e as MessageEvent).data).text); });
@@ -760,7 +781,7 @@ function useTaskStream(runId: string, sel: Sel | null, taskStatus: string | unde
     es.addEventListener("tool_result", (e) => {
       setLastEventAt(Date.now());
       const d = JSON.parse((e as MessageEvent).data);
-      setBlocks((prev) => [...prev, { kind: "tool_result", name: d.name, text: d.text, isError: d.is_error }]);
+      setBlocks((prev) => [...prev, { kind: "tool_result", toolCallId: d.tool_call_id, name: d.name, text: d.text, isError: d.is_error }]);
     });
     const end = () => { setStreaming(false); es.close(); if (esRef.current === es) esRef.current = null; };
     es.addEventListener("done", end);   // terminal frame (carries an `error` field on task failure)

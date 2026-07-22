@@ -34,9 +34,11 @@ async def delegate_task(
     runner = get_runner(thread_id_of(runtime))
     if runner is None:
         return Command(update={"messages": [ToolMessage(
-            "[sub-agent delegation is unavailable in this run]", tool_call_id=tcid)]})
-    text, usage = await runner.run(thread_id_of(runtime), description, prompt, subagent_type)
-    update: dict = {"messages": [ToolMessage(text, tool_call_id=tcid)]}
+            "[sub-agent delegation is unavailable in this run]",
+            tool_call_id=tcid, status="error")]})
+    text, usage, failed = await runner.run(thread_id_of(runtime), description, prompt, subagent_type)
+    update: dict = {"messages": [ToolMessage(
+        text, tool_call_id=tcid, status="error" if failed else "success")]}
     if usage:  # attribute the child's token usage to the parent run
         update["usage"] = usage
     return Command(update=update)
