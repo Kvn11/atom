@@ -22,6 +22,7 @@ steps:
       - id: capture_recon
         model: gemini-3.5-flash
         thinking: high
+        recursion_limit: 600
         prompt: |
           You are the LEAD agent coordinating AUTHORIZED reconnaissance of APIs your org owns.
           Your ONLY input this task is the Burp capture at: {{ capture }}
@@ -100,6 +101,7 @@ steps:
       - id: build_sdk
         model: gemini-3.5-flash
         thinking: medium
+        recursion_limit: 600
         prompt: |
           You are the LEAD agent building a small, well-documented Python SDK for the target APIs of an
           authorized security assessment. Your ONLY input this task is the targets file at: {{ targets }}
@@ -141,6 +143,7 @@ steps:
       - id: hypothesize
         model: gemini-3.5-flash
         thinking: high
+        recursion_limit: 600
         prompt: |
           You are the LEAD coordinating security + privacy HYPOTHESIS development for an authorized
           assessment of your org's own API targets. Input: targets file {{ targets }}. Reusable context:
@@ -198,6 +201,7 @@ steps:
       - id: test
         model: gemini-3.5-flash
         thinking: high
+        recursion_limit: 600
         prompt: |
           You are the LEAD coordinating AUTHORIZED live testing of your org's own API targets.
           Targets: {{ targets }}. Capture: {{ capture }}. SDK: {{ workspace }}/sdk/. Reusable values:
@@ -289,6 +293,7 @@ steps:
       - id: confirm
         model: gemini-3.5-flash
         thinking: high
+        recursion_limit: 600
         prompt: |
           You are the LEAD coordinating INDEPENDENT reproduction of the findings emitted by the Test
           step of an authorized assessment of your org's own APIs. Raw findings:

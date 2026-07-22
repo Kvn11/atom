@@ -11,6 +11,15 @@ def _load():
     return WorkflowDef.model_validate(yaml.safe_load(WF.read_text()))
 
 
+def _all_tasks():
+    return [t for s in _load().steps for t in s.tasks]
+
+
+def test_coordinator_tasks_raise_recursion_limit():
+    for t in _all_tasks():
+        assert t.recursion_limit == 600
+
+
 def test_workflow_loads_and_has_expected_shape():
     wf = _load()
     assert wf.name == "api-security-assessment"
