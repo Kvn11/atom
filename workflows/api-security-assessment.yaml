@@ -30,14 +30,26 @@ steps:
           The persistent Obsidian vault is "api-security-assessment"; notes are split by DOMAIN at the
           root: <domain>/recon.md and <domain>/endpoints/<slug>.md.
 
-          YOU ARE A COORDINATOR. Do NOT inspect individual endpoints yourself — running `burp.py view`
-          on many endpoints in your own context will hit the recursion limit. Inspecting and documenting
-          each endpoint is SUB-AGENT work (STEP C). Your job is: map, harvest, delegate, summarize.
+          COORDINATOR CONTRACT (read this first — it governs everything below):
+          - Your job is ONLY: run the corpus-wide setup calls, fan out one bash sub-agent per observed
+            endpoint, then summarize. You NEVER inspect or document a single endpoint yourself.
+          - Fan out ALL endpoints in ONE message: emit EVERY delegate_task call together in a single
+            turn, then STOP and wait for their replies. NEVER delegate one endpoint, look at its
+            result, then delegate the next — that serial loop is what exhausts your step budget.
+          - Every delegate_task MUST set subagent_type="bash" (a general-purpose sub-agent has no
+            shell and cannot run the toolkit — it will fail).
+          - Do NOT inspect a single endpoint yourself. These are SUB-AGENT-ONLY and you must NEVER run
+            them: burp.py view, burp.py cred, burp.py decode-auth, targets.py show, vault_note.py slug,
+            obsidian read, or any per-endpoint note write. If you catch yourself about to inspect ONE
+            endpoint, STOP and delegate it instead. (burp.py hosts / index / harvest are corpus-wide —
+            those you DO run.)
+          - After fan-out, do nothing per-endpoint: read only the sub-agents' one-line replies, then
+            write the STEP D summary.
 
           STEP A — map the capture (you do this):
             python3 /mnt/skill_library/api-recon-toolkit/scripts/burp.py hosts {{ capture }}
             python3 /mnt/skill_library/api-recon-toolkit/scripts/burp.py index {{ capture }} --apis-only --format json
-          Keep the resulting list of API items (each has an index, method, and url).
+          Keep the resulting list of API item indices.
 
           STEP B — harvest reusable values (you do this):
             python3 /mnt/skill_library/api-recon-toolkit/scripts/burp.py harvest {{ capture }} --format json
@@ -51,11 +63,9 @@ steps:
               --vault api-security-assessment --domain <domain> --kind recon \
               --from {{ workspace }}/recon/<domain>.recon.md
 
-          STEP C — DELEGATE one sub-agent PER observed endpoint. For EACH item in the STEP A list, call
-          the delegate_task tool. You MUST set subagent_type="bash" (a general-purpose sub-agent has no
-          shell and cannot run the toolkit — it will fail). Do NOT run `burp.py view` yourself. You may
-          issue several delegate_task calls together so the sub-agents run in parallel. Give each sub-agent
-          this EXACT prompt, substituting <INDEX>/<METHOD>/<PATH>/<HOST> for that item:
+          STEP C — fan out (ONE message, all at once): for EACH item index from STEP A, call
+          delegate_task, ALL in a single turn, subagent_type="bash" (REQUIRED). The ONLY value that
+          varies between the calls is <INDEX>. Give each sub-agent this EXACT prompt, substituting only <INDEX>:
 
             You are documenting ONE API endpoint for an authorized security assessment. Do only this one.
             Capture: {{ capture }}. Toolkit: /mnt/skill_library/api-recon-toolkit/scripts/.
@@ -64,6 +74,8 @@ steps:
                  python3 /mnt/skill_library/api-recon-toolkit/scripts/burp.py view {{ capture }} --index <INDEX> --req-headers --resp-headers --cookies
                  python3 /mnt/skill_library/api-recon-toolkit/scripts/burp.py view {{ capture }} --index <INDEX> --req-body --resp-body --keys
                  python3 /mnt/skill_library/api-recon-toolkit/scripts/burp.py view {{ capture }} --index <INDEX> --decode-auth
+               From the view output, take <METHOD> and <PATH> (the request line) and <HOST> (the Host
+               header / request URL). You derive these yourself — they are NOT given to you.
             2. Compute the note filename stem:
                  python3 /mnt/skill_library/api-recon-toolkit/scripts/vault_note.py slug "<METHOD> <PATH>"
             3. Write the note body to {{ workspace }}/endpoints/<slug>.md using write_file, with EXACTLY this

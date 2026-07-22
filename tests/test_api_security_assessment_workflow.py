@@ -169,6 +169,16 @@ def test_confirm_is_thin_and_inlines_antibot():
     assert "SAFETY GATE" in p and "verbatim" in p.lower()
 
 
+def test_capture_recon_is_thin_and_subagent_takes_only_index():
+    p = _task_at(0, 0)  # capture_recon
+    assert "COORDINATOR CONTRACT" in p and "in ONE message" in p
+    assert "substituting only <INDEX>" in p          # index-only delegation
+    assert "<METHOD>/<PATH>/<HOST>" not in p          # old multi-placeholder substitution gone
+    # sub-agent still derives method/path from view and files the note create-if-missing
+    assert "take <method> and <path>" in p.lower()
+    assert "--if-missing" in p and "## Recon — {{ date }}" in p and "--kind recon" in p
+
+
 def test_test_lead_builds_roster_file_and_subagent_self_selects():
     p = _task_at(2, 0)  # Test step
     assert "COORDINATOR CONTRACT" in p and "in ONE message" in p
