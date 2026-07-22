@@ -51,3 +51,39 @@ function firstLine(s: string, n: number): string {
   const line = s.split("\n").find((l) => l.trim()) ?? "";
   return line.length > n ? line.slice(0, n - 1) + "…" : line;
 }
+
+const STATUS_PILL: Record<SubStatus, string> = { running: "warn", done: "ok", failed: "err", incomplete: "idle" };
+
+// One delegate_task rendered as a status card: description + type badge + running/done/failed pill,
+// a one-line summary, and a collapsible (default-closed) full report. Status is derived, not fetched.
+export function SubAgentCard(
+  { description, subagentType, result, streaming }:
+  { description: string; subagentType: string; result: SubResult | undefined; streaming: boolean },
+) {
+  const [open, setOpen] = useState(false);
+  const status = subStatus(result, streaming);
+  const report = result?.text;
+  const summary = subSummary(status, report);
+  return (
+    <div className={`subagent-card ${status}`}>
+      <div className="sa-head">
+        <span className="sa-icon" aria-hidden="true">{"\u{1F916}"}</span>
+        <span className="sa-title" title={description}>{description}</span>
+        <span className={`pill ${STATUS_PILL[status]} sa-status`}>
+          {status === "running" && <span className="sa-live" aria-hidden="true" />}
+          {status}
+        </span>
+      </div>
+      <div className="sa-sub">
+        <span className="tag">{subagentType}</span>
+        {summary && <span className="sa-summary" title={summary}>{summary}</span>}
+        {report && (
+          <button className="sa-toggle" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
+            {open ? "▾ hide report" : "▸ view report"}
+          </button>
+        )}
+      </div>
+      {open && report && <div className="sa-report">{report}</div>}
+    </div>
+  );
+}

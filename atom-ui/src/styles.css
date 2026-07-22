@@ -337,3 +337,17 @@ table.runs tbody tr:last-child td { border-bottom: 0; }
 .hljs-deletion { color: var(--err); }
 .hljs-emphasis { font-style: italic; }
 .hljs-strong { font-weight: 600; }
+
+/* Sub-agent (delegate_task) status cards */
+.subagent-card { border: 1px solid var(--border); background: var(--surface); border-radius: var(--radius-sm); padding: 9px 11px; margin: 4px 0; }
+.subagent-card.failed { border-color: var(--err-weak); background: var(--err-weak); }
+.sa-head { display: flex; align-items: center; gap: 8px; }
+.sa-icon { flex: none; font-size: 14px; line-height: 1; }
+.sa-title { font-weight: 600; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sa-status { margin-left: auto; flex: none; }
+.sa-live { width: 7px; height: 7px; border-radius: 999px; background: currentColor; margin-right: 5px; display: inline-block; animation: gen-blink 1.2s infinite ease-in-out; }
+.sa-sub { display: flex; align-items: center; gap: 8px; margin-top: 5px; font-size: 12px; color: var(--ink-3); }
+.sa-summary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sa-toggle { margin-left: auto; flex: none; border: 0; background: transparent; color: var(--ink-2); font-size: 12px; padding: 0; cursor: pointer; }
+.sa-report { margin-top: 7px; padding-top: 7px; border-top: 1px solid var(--border); font-family: var(--mono); font-size: 12px; color: var(--ink-2); white-space: pre-wrap; overflow-x: auto; }
+@media (prefers-reduced-motion: reduce) { .sa-live { animation: none; } }
