@@ -228,7 +228,7 @@ async def test_subagent_child_config_carries_trace(base_config):
 
     runner._child_agent = lambda st, system=None: _StubAgent()
 
-    text, _usage = await runner.run("p1", "do the thing", "go", "general-purpose")
+    text, _usage, _failed = await runner.run("p1", "do the thing", "go", "general-purpose")
     assert text == "CHILD_DONE"
     cfg = captured["config"]
     assert cfg["configurable"]["thread_id"].startswith("p1:sub:")  # child keeps its own state id
@@ -337,3 +337,90 @@ def test_child_middleware_includes_size_limit_middlewares(atom_home):
     cap = [m for m in mws if isinstance(m, ToolOutputCapMiddleware)]
     assert overflow and overflow[0].context_window == 123_456 and overflow[0].max_attempts == 2
     assert cap and cap[0].max_chars == 777
+
+
+@pytest.mark.asyncio
+async def test_run_reports_failed_on_success_and_exception(base_config):
+    from atom.subagent import SubagentRunner
+    from tests.conftest import ScriptedChatModel
+
+    model = ScriptedChatModel(responses=[AIMessage(content="OK")], profile={"max_input_tokens": 100_000})
+    runner = SubagentRunner(model=model, home=str(base_config.home),
+                            context_window=100_000, bash_enabled=False)
+
+    class _OkAgent:
+        async def ainvoke(self, inp, config=None, context=None):
+            return {"messages": [AIMessage(content="OK")]}
+
+    runner._child_agent = lambda st, system=None: _OkAgent()
+    text, _usage, failed = await runner.run("p1", "d", "go", "general-purpose")
+    assert text == "OK" and failed is False
+
+    class _BoomAgent:
+        async def ainvoke(self, inp, config=None, context=None):
+            raise RuntimeError("boom")
+
+    runner._child_agent = lambda st, system=None: _BoomAgent()
+    text, _usage, failed = await runner.run("p1", "d", "go", "general-purpose")
+    assert failed is True and text.startswith("[sub-agent 'd' failed:")
+
+
+@pytest.mark.asyncio
+async def test_run_reports_failed_on_timeout(base_config):
+    import asyncio
+    from atom.subagent import SubagentRunner
+    from tests.conftest import ScriptedChatModel
+
+    model = ScriptedChatModel(responses=[AIMessage(content="OK")], profile={"max_input_tokens": 100_000})
+    runner = SubagentRunner(model=model, home=str(base_config.home),
+                            context_window=100_000, bash_enabled=False)
+    runner.timeout_seconds = 0.01
+
+    class _SlowAgent:
+        async def ainvoke(self, inp, config=None, context=None):
+            await asyncio.sleep(1)
+            return {"messages": [AIMessage(content="OK")]}
+
+    runner._child_agent = lambda st, system=None: _SlowAgent()
+    text, _usage, failed = await runner.run("p1", "slow", "go", "general-purpose")
+    assert failed is True and "timed out" in text
+
+
+@pytest.mark.asyncio
+async def test_delegate_task_sets_error_status_on_failure():
+    from types import SimpleNamespace
+    from atom.subagent import register_runner, unregister_runner
+    from atom.tools.subagent import delegate_task
+
+    class _FakeRunner:
+        async def run(self, thread_id, description, prompt, subagent_type):
+            return "[sub-agent 'x' failed: RuntimeError: boom]", {}, True
+
+    register_runner("p1", _FakeRunner())
+    try:
+        runtime = SimpleNamespace(context={"thread_id": "p1"}, tool_call_id="tc1")
+        cmd = await delegate_task.coroutine(runtime, description="x", prompt="go", subagent_type="general-purpose")
+    finally:
+        unregister_runner("p1")
+    msg = cmd.update["messages"][0]
+    assert msg.status == "error" and msg.tool_call_id == "tc1"
+
+
+@pytest.mark.asyncio
+async def test_delegate_task_success_status_is_not_error():
+    from types import SimpleNamespace
+    from atom.subagent import register_runner, unregister_runner
+    from atom.tools.subagent import delegate_task
+
+    class _FakeRunner:
+        async def run(self, thread_id, description, prompt, subagent_type):
+            return "report", {"total_tokens": 5}, False
+
+    register_runner("p1", _FakeRunner())
+    try:
+        runtime = SimpleNamespace(context={"thread_id": "p1"}, tool_call_id="tc2")
+        cmd = await delegate_task.coroutine(runtime, description="x", prompt="go", subagent_type="general-purpose")
+    finally:
+        unregister_runner("p1")
+    msg = cmd.update["messages"][0]
+    assert msg.status == "success" and cmd.update["usage"] == {"total_tokens": 5}
